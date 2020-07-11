@@ -2,21 +2,23 @@ extern crate walkdir;
 extern crate fasthash;
 
 use walkdir::WalkDir;
-use walkdir::DirEntry;
-use walkdir::Error;
-use std::any::Any;
+// use walkdir::DirEntry;
+// use walkdir::Error;
 
 use fasthash::murmur3;
 use fasthash::HasherExt;
 use fasthash::StreamHasher;
 
 
-use std::hash::Hash;
+// use std::hash::Hash;
 use std::path::Path;
 use std::io::Read;
-use std::ops::DerefMut;
 
-// this is not very good beacuse it confuses intellij
+
+mod lib;
+use lib::fs;
+
+// this is not very good because it confuses intellij
 #[cfg(not(test))]
 use std::fs::File;
 
