@@ -8,4 +8,4 @@ edition = "2018"
 
 [dependencies]
 walkdir = "2"
-fasthash = "0.4.0"
+fasthash = { git = "https://github.com/Joshua-Wright/rust-fasthash/", rev = "bd0ef9b9391ca80d1a115c3207e1f8417bb4c6b9"}

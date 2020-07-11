@@ -11,21 +11,33 @@ use fasthash::HasherExt;
 use fasthash::StreamHasher;
 
 
-use std::fs::File;
 use std::hash::Hash;
 use std::path::Path;
 use std::io::Read;
 use std::ops::DerefMut;
 
+// this is not very good beacuse it confuses intellij
+#[cfg(not(test))]
+use std::fs::File;
+
+#[cfg(test)]
+struct File {
+}
+
+#[cfg(test)]
+impl File {
+    pub fn open<P: AsRef<Path>>(path: P) -> std::io::Result<std::io::Cursor<&'static[u8]>> {
+        let s: &'static str = "test";
+        Ok(std::io::Cursor::new(s.as_bytes()))
+    }
+}
+
 
 fn hash_file(path: &Path) -> std::io::Result<u128> {
     let mut file = File::open(path)?;
     let mut hasher: murmur3::Hasher128_x64 = Default::default();
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
-    buffer.hash(&mut hasher);
-    // TODO: change the crate so that this works
-    // StreamHasher::write_stream(&mut hasher, &mut file)?;
+    StreamHasher::write_stream(&mut hasher, &mut file)?;
+    // hasher.write_stream(&mut file)?;
     Ok(hasher.finish_ext())
 }
 
@@ -51,3 +63,21 @@ fn main() {
 
     println!("Hello, world!");
 }
+
+
+#[test]
+fn test_mock_file() {
+    let mut f = File::open("asdf").unwrap();
+    let mut s = String::new();
+    f.read_to_string(&mut s).unwrap();
+    println!("{}", s);
+    assert_eq!(s, "test");
+}
+
+
+#[test]
+fn test_hash_file() {
+    let hash = hash_file(Path::new("unused")).unwrap();
+    assert_eq!(hash, 204797213367049729698754624420042367389u128);
+}
+
