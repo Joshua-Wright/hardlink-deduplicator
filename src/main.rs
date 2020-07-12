@@ -18,7 +18,6 @@ fn main() {
                         Ok(hash) =>
                             println!("{} {}", hash_to_hex_str(hash), f.path().to_string_lossy()),
                         Err(e) =>
-                        // (),
                             println!("{:?}: Error: {:?}", f.path().to_string_lossy(), e),
                     },
                 // directory or symlink, we don't care
