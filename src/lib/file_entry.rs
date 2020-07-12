@@ -1,20 +1,22 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::option::Option;
 use std::time::SystemTime;
 use std::io::Result;
 
 use super::fs;
 use crate::lib::fast_hash::hash_file;
+use crate::lib::fs::io::{Error, ErrorKind};
 
 
-#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+// TODO: rename to FileEntry or something like that?
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub struct FileHash<'a> {
-    relative_path: &'a Path,
-    relative_folder: &'a Path,
-    absolute_path: &'a Path,
+    relative_path: PathBuf,
+    relative_folder: PathBuf,
+    absolute_path: PathBuf,
     fast_hash: Option<u128>,
-    sha256_hash: Option<&'a str>,
     // TODO: make this a numeric?
+    sha256_hash: Option<&'a str>,
     stat_size: Option<u64>,
     stat_modified: Option<SystemTime>,
     stat_accessed: Option<SystemTime>,
@@ -23,14 +25,40 @@ pub struct FileHash<'a> {
 }
 
 impl<'a> FileHash<'a> {
-    // pub fn new(base_path: Path, path: Path) -> Self {
-    //     // TODO abstract this stuff, through fs shim
-    // }
-    pub fn add_hashes<F: fs::Fs>(&self, fs: &F) -> Result<Self> {
-        let hash = hash_file(fs, self.absolute_path)?;
+        // TODO: make this accept a different kind of path type, like the generic ref one maybe
+    pub fn new<F: fs::Fs>(fs: &F, base_path: &Path, path: &Path) -> Result<Self> {
+        // TODO: maybe switch to a different kind of error type?
+        let absolute_path: PathBuf = match fs.canonicalize(path) {
+            Ok(p) => p,
+            Err(_) => return Err(Error::new(ErrorKind::InvalidInput, "error finding absolute path")),
+        };
+        println!("{:?}", absolute_path);
+        let relative_path = match absolute_path.strip_prefix(base_path) {
+            Ok(p) => p,
+            Err(_) => return Err(Error::new(ErrorKind::InvalidInput, "error making relative path")),
+        };
+        let relative_folder = match relative_path.parent() {
+            Some(p) => p,
+            None => return Err(Error::new(ErrorKind::InvalidInput, "error finding relative folder")),
+        };
+        Ok(Self {
+            relative_path: relative_path.to_owned(),
+            relative_folder: relative_folder.to_owned(),
+            absolute_path: absolute_path.clone(),
+            fast_hash: None,
+            sha256_hash: None,
+            stat_size: None,
+            stat_modified: None,
+            stat_accessed: None,
+            stat_created: None,
+            stat_inode: None,
+        })
+    }
+    pub fn add_fast_hash<F: fs::Fs>(&self, fs: &F) -> Result<Self> {
+        let hash = hash_file(fs, &self.absolute_path)?;
         Ok(Self {
             fast_hash: Some(hash),
-            ..*self
+            ..self.clone()
         })
     }
 }
@@ -39,16 +67,40 @@ impl<'a> FileHash<'a> {
 mod test {
     use crate::lib::fs::{TestFs, Path};
     use crate::lib::file_entry::FileHash;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_new_file_entry() {
+        let mut test_fs = TestFs::default();
+        test_fs.add_text_file("/somefolder/filepath", "test");
+        test_fs.set_cwd("/somefolder/");
+
+        let file_hash = FileHash::new(&test_fs, Path::new("/somefolder/"), Path::new("filepath")).unwrap();
+        assert_eq!(file_hash.absolute_path, Path::new("/somefolder/filepath"));
+        assert_eq!(file_hash.relative_path, Path::new("filepath"));
+        assert_eq!(file_hash.relative_folder, Path::new(""));
+
+
+        let file_hash = FileHash::new(
+            &test_fs,
+            Path::new("/somefolder/"),
+            Path::new("subfolder/file")
+        ).unwrap();
+        assert_eq!(file_hash.absolute_path, Path::new("/somefolder/subfolder/file"));
+        assert_eq!(file_hash.relative_path, Path::new("subfolder/file"));
+        assert_eq!(file_hash.relative_folder, Path::new("subfolder/"));
+    }
 
     #[test]
     fn test_add_hash() {
         let mut test_fs = TestFs::default();
         test_fs.add_text_file("/somefolder/filepath", "test");
 
+
         let file_hash = FileHash {
-            relative_path: Path::new("filepath"),
-            relative_folder: Path::new("."),
-            absolute_path: Path::new("/somefolder/filepath"),
+            relative_path: PathBuf::from("filepath"),
+            relative_folder: PathBuf::from("."),
+            absolute_path: PathBuf::from("/somefolder/filepath"),
             fast_hash: None,
             sha256_hash: None,
             stat_size: None,
@@ -59,7 +111,7 @@ mod test {
         };
 
         assert_eq!(file_hash.fast_hash, None);
-        let file_hash2 = file_hash.add_hashes(&test_fs).unwrap();
+        let file_hash2 = file_hash.add_fast_hash(&test_fs).unwrap();
         assert_eq!(file_hash2.fast_hash, Some(204797213367049729698754624420042367389));
     }
 }
