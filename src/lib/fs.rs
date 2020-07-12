@@ -1,9 +1,6 @@
-pub use std::path::Path;
 pub use std::io;
 pub use std::io::Result;
-use std::borrow::Borrow;
-use crate::lib::fs::io::ErrorKind;
-
+pub use std::path::Path;
 
 pub trait Fs {
     type File: std::io::Read;
@@ -30,12 +27,15 @@ impl Fs for RealFs {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub struct TestFs<'a> {
     filedata: std::collections::HashMap<&'a str, &'a [u8]>
 }
 
+#[cfg(test)]
 impl<'a> TestFs<'a> {
+    #[allow(dead_code)]
     pub fn with_files(files: Vec<(&'static str, &'static str)>) -> TestFs<'a> {
         use std::collections::HashMap;
         use std::iter::FromIterator;
@@ -55,10 +55,12 @@ impl<'a> TestFs<'a> {
     }
 }
 
+#[cfg(test)]
 impl<'a> Fs for TestFs<'a> {
     type File = std::io::Cursor<&'a [u8]>;
 
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
+        use std::io::ErrorKind;
         match self.filedata.get(&path.as_ref().to_string_lossy().as_ref()) {
             None => Err(std::io::Error::new(ErrorKind::NotFound, "File not found")),
             Some(s) => Ok(std::io::Cursor::new(s)),

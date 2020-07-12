@@ -1,15 +1,14 @@
 extern crate fasthash;
 
-use fasthash::murmur3;
-use fasthash::HasherExt;
-use fasthash::StreamHasher;
-
 use std::path::Path;
+
+use fasthash::HasherExt;
+use fasthash::murmur3;
+use fasthash::StreamHasher;
 
 use super::fs;
 
-
-fn hash_file<F: fs::Fs>(fs: &F, path: &Path) -> std::io::Result<u128> {
+pub fn hash_file<F: fs::Fs>(fs: &F, path: &Path) -> std::io::Result<u128> {
     let mut file = fs.open(path)?;
     let mut hasher: murmur3::Hasher128_x64 = Default::default();
     StreamHasher::write_stream(&mut hasher, &mut file)?;
@@ -17,12 +16,25 @@ fn hash_file<F: fs::Fs>(fs: &F, path: &Path) -> std::io::Result<u128> {
     Ok(hasher.finish_ext())
 }
 
+pub fn hash_to_hex_str(hash: u128) -> String {
+    format!("{:032X}", hash)
+}
 
+
+#[cfg(test)]
 mod test {
+    use crate::lib::fast_hash::hash_to_hex_str;
+
     use super::fs::TestFs;
-    use super::Path;
     use super::hash_file;
-    use crate::lib::fs::io::Error;
+    use super::Path;
+
+    #[test]
+    fn test_hash_to_string() {
+        assert_eq!(hash_to_hex_str(204797213367049729698754624420042367389), "9A128231F9BD4D82AC7D28CC74BDE19D");
+        // to make sure it zero pads
+        assert_eq!(hash_to_hex_str(0), "00000000000000000000000000000000");
+    }
 
     #[test]
     fn test_hash_file() {
