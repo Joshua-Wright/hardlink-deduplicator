@@ -25,8 +25,8 @@ pub struct FileHash<'a> {
 }
 
 impl<'a> FileHash<'a> {
-        // TODO: make this accept a different kind of path type, like the generic ref one maybe
-    pub fn new<F: fs::Fs>(fs: &F, base_path: &Path, path: &Path) -> Result<Self> {
+    // TODO: make this accept a different kind of path type, like the generic ref one maybe
+    pub fn new<F: fs::AbstractFs>(fs: &F, base_path: &Path, path: &Path) -> Result<Self> {
         // TODO: maybe switch to a different kind of error type?
         let absolute_path: PathBuf = match fs.canonicalize(path) {
             Ok(p) => p,
@@ -54,7 +54,8 @@ impl<'a> FileHash<'a> {
             stat_inode: None,
         })
     }
-    pub fn add_fast_hash<F: fs::Fs>(&self, fs: &F) -> Result<Self> {
+
+    pub fn add_fast_hash<F: fs::AbstractFs>(&self, fs: &F) -> Result<Self> {
         let hash = hash_file(fs, &self.absolute_path)?;
         Ok(Self {
             fast_hash: Some(hash),
@@ -84,7 +85,7 @@ mod test {
         let file_hash = FileHash::new(
             &test_fs,
             Path::new("/somefolder/"),
-            Path::new("subfolder/file")
+            Path::new("subfolder/file"),
         ).unwrap();
         assert_eq!(file_hash.absolute_path, Path::new("/somefolder/subfolder/file"));
         assert_eq!(file_hash.relative_path, Path::new("subfolder/file"));

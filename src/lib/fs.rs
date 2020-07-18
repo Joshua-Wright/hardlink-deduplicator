@@ -5,11 +5,22 @@ use std::path::PathBuf;
 
 use mockall::*;
 use mockall::predicate::*;
+use std::ops::DerefMut;
+use std::borrow::{BorrowMut, Borrow};
+use std::cell::UnsafeCell;
 
-pub trait Fs {
+pub trait AbstractFs {
     type File: std::io::Read;
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File>;
     fn canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf>;
+}
+
+cfg_if::cfg_if! {
+    if #[cfg(not(test))] {
+        pub use RealFs as Fs;
+    } else {
+        pub use TestFs as Fs;
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -21,7 +32,7 @@ pub struct RealFs {}
 impl RealFs {}
 
 
-impl Fs for RealFs {
+impl AbstractFs for RealFs {
     type File = std::fs::File;
 
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
@@ -41,20 +52,22 @@ impl Fs for RealFs {
 pub struct TestFs<'a> {
     filedata: std::collections::HashMap<&'a str, &'a [u8]>,
     cwd: PathBuf,
+    count: UnsafeCell<i64>,
 }
 
 
 #[cfg(test)]
-impl TestFs<'static> {
+impl<'a> TestFs<'a> {
     #[allow(dead_code)]
-    pub fn with_files(files: Vec<(&'static str, &'static str)>) -> TestFs<'static> {
+    pub fn with_files(files: &[(&'static str, &'static str)]) -> TestFs<'static> {
         use std::collections::HashMap;
         use std::iter::FromIterator;
         TestFs {
-            filedata: HashMap::from_iter(files.iter()
+            filedata: HashMap::from_iter(files.to_owned().iter()
                 .map(|(a, b)| (a.to_owned(), b.to_owned().as_bytes())
                 )),
             cwd: PathBuf::from("/"),
+            count: UnsafeCell::new(0),
         }
     }
 
@@ -72,18 +85,21 @@ impl TestFs<'static> {
 }
 
 #[cfg(test)]
-impl Fs for TestFs<'static> {
-    type File = std::io::Cursor<&'static [u8]>;
+impl<'a> AbstractFs for TestFs<'a> {
+    type File = std::io::Cursor<Box<[u8]>>;
 
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
         use std::io::ErrorKind;
         match self.filedata.get(&path.as_ref().to_string_lossy().as_ref()) {
             None => Err(std::io::Error::new(ErrorKind::NotFound, "File not found")),
-            Some(s) => Ok(std::io::Cursor::new(s)),
+            Some(s) => Ok(std::io::Cursor::new(s.to_vec().into_boxed_slice())),
         }
     }
 
     fn canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf> {
+        unsafe {
+            *self.count.get() += 1;
+        }
         // TODO what should we even do here?
         if path.as_ref().has_root() {
             Ok(path.as_ref().to_owned())

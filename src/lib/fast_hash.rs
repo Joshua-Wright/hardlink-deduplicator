@@ -7,9 +7,11 @@ use fasthash::murmur3;
 use fasthash::StreamHasher;
 
 use super::fs;
+use super::fs::AbstractFs;
 
-pub fn hash_file<F: fs::Fs>(fs: &F, path: &Path) -> std::io::Result<u128> {
+pub fn hash_file<Fs: AbstractFs>(fs: &Fs, path: &Path) -> std::io::Result<u128> {
     let mut file = fs.open(path)?;
+
     let mut hasher: murmur3::Hasher128_x64 = Default::default();
     StreamHasher::write_stream(&mut hasher, &mut file)?;
     // hasher.write_stream(&mut file)?;
