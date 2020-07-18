@@ -1,3 +1,4 @@
+pub mod files_index;
 pub mod fs;
 pub mod fast_hash;
-mod file_entry;
+pub mod file_entry;

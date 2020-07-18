@@ -8,23 +8,24 @@ use crate::lib::fast_hash::hash_file;
 use crate::lib::fs::io::{Error, ErrorKind};
 
 
-// TODO: rename to FileEntry or something like that?
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub struct FileHash<'a> {
-    relative_path: PathBuf,
-    relative_folder: PathBuf,
-    absolute_path: PathBuf,
-    fast_hash: Option<u128>,
+pub struct FileEntry<'a> {
+    pub relative_path: PathBuf,
+    pub relative_folder: PathBuf,
+    pub absolute_path: PathBuf,
+    pub fast_hash: Option<u128>,
     // TODO: make this a numeric?
-    sha256_hash: Option<&'a str>,
-    stat_size: Option<u64>,
-    stat_modified: Option<SystemTime>,
-    stat_accessed: Option<SystemTime>,
-    stat_created: Option<SystemTime>,
-    stat_inode: Option<u64>,
+    pub sha256_hash: Option<&'a str>,
+    pub stat_size: Option<u64>,
+    // unique_id is used to disambiguate files with the same fast_hash
+    pub unique_id: Option<u64>,
+    pub stat_modified: Option<SystemTime>,
+    pub stat_accessed: Option<SystemTime>,
+    pub stat_created: Option<SystemTime>,
+    pub stat_inode: Option<u64>,
 }
 
-impl<'a> FileHash<'a> {
+impl<'a> FileEntry<'a> {
     // TODO: make this accept a different kind of path type, like the generic ref one maybe
     pub fn new<F: fs::AbstractFs>(fs: &F, base_path: &Path, path: &Path) -> Result<Self> {
         // TODO: maybe switch to a different kind of error type?
@@ -48,6 +49,7 @@ impl<'a> FileHash<'a> {
             fast_hash: None,
             sha256_hash: None,
             stat_size: None,
+            unique_id: None,
             stat_modified: None,
             stat_accessed: None,
             stat_created: None,
@@ -67,7 +69,7 @@ impl<'a> FileHash<'a> {
 #[cfg(test)]
 mod test {
     use crate::lib::fs::{TestFs, Path};
-    use crate::lib::file_entry::FileHash;
+    use crate::lib::file_entry::FileEntry;
     use std::path::PathBuf;
 
     #[test]
@@ -76,13 +78,13 @@ mod test {
         test_fs.add_text_file("/somefolder/filepath", "test");
         test_fs.set_cwd("/somefolder/");
 
-        let file_hash = FileHash::new(&test_fs, Path::new("/somefolder/"), Path::new("filepath")).unwrap();
+        let file_hash = FileEntry::new(&test_fs, Path::new("/somefolder/"), Path::new("filepath")).unwrap();
         assert_eq!(file_hash.absolute_path, Path::new("/somefolder/filepath"));
         assert_eq!(file_hash.relative_path, Path::new("filepath"));
         assert_eq!(file_hash.relative_folder, Path::new(""));
 
 
-        let file_hash = FileHash::new(
+        let file_hash = FileEntry::new(
             &test_fs,
             Path::new("/somefolder/"),
             Path::new("subfolder/file"),
@@ -98,13 +100,14 @@ mod test {
         test_fs.add_text_file("/somefolder/filepath", "test");
 
 
-        let file_hash = FileHash {
+        let file_hash = FileEntry {
             relative_path: PathBuf::from("filepath"),
             relative_folder: PathBuf::from("."),
             absolute_path: PathBuf::from("/somefolder/filepath"),
             fast_hash: None,
             sha256_hash: None,
             stat_size: None,
+            unique_id: None,
             stat_modified: None,
             stat_accessed: None,
             stat_created: None,

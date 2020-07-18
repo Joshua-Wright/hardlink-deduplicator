@@ -60,12 +60,10 @@ pub struct TestFs<'a> {
 impl<'a> TestFs<'a> {
     #[allow(dead_code)]
     pub fn with_files(files: &[(&'static str, &'static str)]) -> TestFs<'static> {
-        use std::collections::HashMap;
-        use std::iter::FromIterator;
         TestFs {
-            filedata: HashMap::from_iter(files.to_owned().iter()
-                .map(|(a, b)| (a.to_owned(), b.to_owned().as_bytes())
-                )),
+            filedata: files.to_owned().iter()
+                .map(|(a, b)| (a.to_owned(), b.to_owned().as_bytes()))
+                .collect(),
             cwd: PathBuf::from("/"),
             count: UnsafeCell::new(0),
         }
