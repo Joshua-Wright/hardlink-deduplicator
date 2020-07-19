@@ -1,18 +1,23 @@
 pub use std::io;
-pub use std::io::Result;
 pub use std::path::Path;
 use std::path::PathBuf;
+use super::Result;
+use super::Error;
 
 use mockall::*;
 use mockall::predicate::*;
-use std::ops::DerefMut;
+use std::ops::{DerefMut};
 use std::borrow::{BorrowMut, Borrow};
 use std::cell::UnsafeCell;
+use std::fs::Metadata;
+use std::time::SystemTime;
 
 pub trait AbstractFs {
     type File: std::io::Read;
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File>;
     fn canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf>;
+    // size, modified, accessed, created, inode
+    fn metadata<P: AsRef<Path>>(&self, path: P) -> Result<(u64, SystemTime, SystemTime, SystemTime, u64)>;
 }
 
 cfg_if::cfg_if! {
@@ -36,11 +41,20 @@ impl AbstractFs for RealFs {
     type File = std::fs::File;
 
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
-        Self::File::open(path)
+        Self::File::open(path).map_err(|e| e.into())
     }
 
     fn canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf> {
-        std::fs::canonicalize(path)
+        std::fs::canonicalize(path).map_err(|e| e.into())
+    }
+
+    fn metadata<P: AsRef<Path>>(&self, path: P) -> Result<(u64, SystemTime, SystemTime, SystemTime, u64)> {
+        let m = std::fs::metadata(path)?;
+        if !m.is_file() {
+            return Err("path is not a file".into());
+        }
+        use std::os::linux::fs::MetadataExt;
+        Ok((m.len(), m.modified()?, m.accessed()?, m.created()?, m.st_ino()))
     }
 }
 
@@ -89,7 +103,7 @@ impl<'a> AbstractFs for TestFs<'a> {
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
         use std::io::ErrorKind;
         match self.filedata.get(&path.as_ref().to_string_lossy().as_ref()) {
-            None => Err(std::io::Error::new(ErrorKind::NotFound, "File not found")),
+            None => Err("File not found".into()),
             Some(s) => Ok(std::io::Cursor::new(s.to_vec().into_boxed_slice())),
         }
     }
@@ -104,5 +118,9 @@ impl<'a> AbstractFs for TestFs<'a> {
         } else {
             Ok(self.cwd.join(path))
         }
+    }
+
+    fn metadata<P: AsRef<Path>>(&self, path: P) -> Result<(u64, SystemTime, SystemTime, SystemTime, u64)> {
+        unimplemented!()
     }
 }

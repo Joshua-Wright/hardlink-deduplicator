@@ -8,8 +8,10 @@ use fasthash::StreamHasher;
 
 use super::fs;
 use super::fs::AbstractFs;
+use super::Result;
 
-pub fn hash_file<Fs: AbstractFs>(fs: &Fs, path: &Path) -> std::io::Result<u128> {
+
+pub fn hash_file<Fs: AbstractFs>(fs: &Fs, path: &Path) -> Result<u128> {
     let mut file = fs.open(path)?;
 
     let mut hasher: murmur3::Hasher128_x64 = Default::default();

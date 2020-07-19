@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::option::Option;
 use std::collections::HashMap;
-use std::io::Result;
 
 use super::file_entry::FileEntry;
 use std::borrow::Borrow;

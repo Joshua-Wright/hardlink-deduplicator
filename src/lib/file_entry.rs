@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::option::Option;
 use std::time::SystemTime;
-use std::io::Result;
+use super::Result;
 
 use super::fs;
 use crate::lib::fast_hash::hash_file;
@@ -16,9 +16,9 @@ pub struct FileEntry<'a> {
     pub fast_hash: Option<u128>,
     // TODO: make this a numeric?
     pub sha256_hash: Option<&'a str>,
-    pub stat_size: Option<u64>,
     // unique_id is used to disambiguate files with the same fast_hash
     pub unique_id: Option<u64>,
+    pub stat_size: Option<u64>,
     pub stat_modified: Option<SystemTime>,
     pub stat_accessed: Option<SystemTime>,
     pub stat_created: Option<SystemTime>,
@@ -28,20 +28,9 @@ pub struct FileEntry<'a> {
 impl<'a> FileEntry<'a> {
     // TODO: make this accept a different kind of path type, like the generic ref one maybe
     pub fn new<F: fs::AbstractFs>(fs: &F, base_path: &Path, path: &Path) -> Result<Self> {
-        // TODO: maybe switch to a different kind of error type?
-        let absolute_path: PathBuf = match fs.canonicalize(path) {
-            Ok(p) => p,
-            Err(_) => return Err(Error::new(ErrorKind::InvalidInput, "error finding absolute path")),
-        };
-        println!("{:?}", absolute_path);
-        let relative_path = match absolute_path.strip_prefix(base_path) {
-            Ok(p) => p,
-            Err(_) => return Err(Error::new(ErrorKind::InvalidInput, "error making relative path")),
-        };
-        let relative_folder = match relative_path.parent() {
-            Some(p) => p,
-            None => return Err(Error::new(ErrorKind::InvalidInput, "error finding relative folder")),
-        };
+        let absolute_path: PathBuf = fs.canonicalize(path)?;
+        let relative_path = absolute_path.strip_prefix(base_path)?;
+        let relative_folder = relative_path.parent().ok_or("error finding relative folder")?;
         Ok(Self {
             relative_path: relative_path.to_owned(),
             relative_folder: relative_folder.to_owned(),
