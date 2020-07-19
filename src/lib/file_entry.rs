@@ -8,13 +8,13 @@ use super::fs;
 use super::Result;
 
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub struct FileEntry<'a> {
+pub struct FileEntry {
     pub relative_path: PathBuf,
     pub relative_folder: PathBuf,
     pub absolute_path: PathBuf,
     pub fast_hash: Option<u128>,
     // TODO: make this a numeric?
-    pub sha256_hash: Option<&'a str>,
+    pub sha256_hash: Option<String>,
     // unique_id is used to disambiguate files with the same fast_hash
     pub unique_id: Option<u64>,
     pub stat_size: u64,
@@ -24,7 +24,7 @@ pub struct FileEntry<'a> {
     pub stat_inode: u64,
 }
 
-impl<'a> FileEntry<'a> {
+impl FileEntry {
     // TODO: make this accept a different kind of path type, like the generic ref one maybe
     pub fn new<F: fs::AbstractFs>(fs: &F, base_path: &Path, path: &Path) -> Result<Self> {
         let absolute_path: PathBuf = fs.canonicalize(path)?;

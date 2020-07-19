@@ -108,7 +108,7 @@ impl TestFs {
         self.inodes.insert(filename.to_owned(), self.next_inode());
     }
 
-    pub fn new_file_entry<'b>(&mut self, path: &str, filedata: &str) -> super::file_entry::FileEntry<'b> {
+    pub fn new_file_entry(&mut self, path: &str, filedata: &str) -> super::file_entry::FileEntry {
         self.add_text_file(path, filedata);
         super::file_entry::FileEntry::new(self, &self.cwd, Path::new(path)).unwrap()
     }
@@ -145,9 +145,10 @@ impl AbstractFs for TestFs {
         let inode = self.inodes.get(path_str.as_ref()).ok_or(Error::Generic(format!("file {:?} not found", path_str)))?;
         Ok((
             buf.len() as u64,
-            SystemTime::now(),
-            SystemTime::now(),
-            SystemTime::now(),
+            // TODO: fix that
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
+            SystemTime::UNIX_EPOCH,
             inode.clone(),
         ))
     }
