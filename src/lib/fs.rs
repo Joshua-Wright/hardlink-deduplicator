@@ -1,14 +1,8 @@
-////////////////////////////////////////////////////////////////////////////////////////////////////
-#[cfg(test)]
-use std::cell::UnsafeCell;
-#[cfg(not(test))]
-use std::fs::Metadata;
 pub use std::io;
 pub use std::path::Path;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use super::Error;
 use super::Result;
 
 pub trait AbstractFs {
@@ -28,6 +22,14 @@ cfg_if::cfg_if! {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+cfg_if::cfg_if! {
+    if #[cfg(test)] {
+        use std::cell::UnsafeCell;
+        use std::ops::Deref;
+        use super::Error;
+    }
+}
 
 
 #[derive(Debug, Default)]
@@ -60,27 +62,26 @@ impl AbstractFs for RealFs {
 
 #[cfg(test)]
 #[derive(Debug, Default)]
-pub struct TestFs<'a> {
-    filedata: std::collections::HashMap<&'a str, &'a [u8]>,
-    inodes: std::collections::HashMap<&'a str, u64>,
-    cwd: PathBuf,
+pub struct TestFs {
+    filedata: std::collections::HashMap<String, Vec<u8>>,
+    inodes: std::collections::HashMap<String, u64>,
+    pub cwd: PathBuf,
     // TODO: turn this into a function call log or something like that
     count: UnsafeCell<i64>,
 }
 
-
 #[cfg(test)]
-impl<'a> TestFs<'a> {
+impl TestFs {
     #[allow(dead_code)]
-    pub fn with_files(files: &[(&'static str, &'static str)]) -> TestFs<'static> {
+    pub fn with_files(files: &[(&str, &str)]) -> TestFs {
         TestFs {
             filedata: files.to_owned().iter()
-                .map(|(a, b)| (a.to_owned(), b.to_owned().as_bytes()))
+                .map(|(a, b)| (a.deref().to_owned(), b.to_owned().as_bytes().to_vec()))
                 .collect(),
             // default to everything is a unique inode
             inodes: files.to_owned().iter()
                 .enumerate()
-                .map(|(i, (a, _))| (a.to_owned(), (i + 1) as u64))
+                .map(|(i, (a, _))| (a.deref().to_owned(), (i + 1) as u64))
                 .collect(),
             cwd: PathBuf::from("/"),
             count: UnsafeCell::new(0),
@@ -97,23 +98,28 @@ impl<'a> TestFs<'a> {
         self.cwd = path.as_ref().to_owned();
     }
 
-    pub fn add_text_file(&mut self, filename: &'static str, filedata: &'static str) {
-        self.filedata.insert(filename, filedata.as_bytes());
-        self.inodes.insert(filename, self.next_inode());
+    pub fn add_text_file(&mut self, filename: &str, filedata: &str) {
+        self.filedata.insert(filename.to_owned(), filedata.as_bytes().to_vec());
+        self.inodes.insert(filename.to_owned(), self.next_inode());
     }
 
-    pub fn add_binary_file(&mut self, filename: &'static str, filedata: &'static [u8]) {
-        self.filedata.insert(filename, filedata);
-        self.inodes.insert(filename, self.next_inode());
+    pub fn add_binary_file(&mut self, filename: &str, filedata: &[u8]) {
+        self.filedata.insert(filename.to_owned(), filedata.to_vec());
+        self.inodes.insert(filename.to_owned(), self.next_inode());
+    }
+
+    pub fn new_file_entry<'b>(&mut self, path: &str, filedata: &str) -> super::file_entry::FileEntry<'b> {
+        self.add_text_file(path, filedata);
+        super::file_entry::FileEntry::new(self, &self.cwd, Path::new(path)).unwrap()
     }
 }
 
 #[cfg(test)]
-impl<'a> AbstractFs for TestFs<'a> {
+impl AbstractFs for TestFs {
     type File = std::io::Cursor<Box<[u8]>>;
 
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
-        match self.filedata.get(&path.as_ref().to_string_lossy().as_ref()) {
+        match self.filedata.get(&path.as_ref().to_string_lossy().to_string()) {
             None => Err("File not found".into()),
             Some(s) => Ok(std::io::Cursor::new(s.to_vec().into_boxed_slice())),
         }

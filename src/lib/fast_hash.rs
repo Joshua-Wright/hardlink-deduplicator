@@ -6,7 +6,6 @@ use fasthash::HasherExt;
 use fasthash::murmur3;
 use fasthash::StreamHasher;
 
-use super::fs;
 use super::fs::AbstractFs;
 use super::Result;
 
@@ -27,8 +26,8 @@ pub fn hash_to_hex_str(hash: u128) -> String {
 #[cfg(test)]
 mod test {
     use crate::lib::fast_hash::hash_to_hex_str;
+    use crate::lib::fs::TestFs;
 
-    use super::fs::TestFs;
     use super::hash_file;
     use super::Path;
 

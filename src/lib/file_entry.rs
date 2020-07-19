@@ -68,10 +68,11 @@ mod test {
     #[test]
     fn test_new_file_entry() {
         let mut test_fs = TestFs::default();
-        test_fs.add_text_file("/somefolder/filepath", "test");
         test_fs.set_cwd("/somefolder/");
 
+        test_fs.add_text_file("/somefolder/filepath", "test");
         let file_hash = FileEntry::new(&test_fs, Path::new("/somefolder/"), Path::new("filepath")).unwrap();
+
         assert_eq!(file_hash.absolute_path, Path::new("/somefolder/filepath"));
         assert_eq!(file_hash.relative_path, Path::new("filepath"));
         assert_eq!(file_hash.relative_folder, Path::new(""));
@@ -92,7 +93,6 @@ mod test {
     fn test_add_hash() {
         let mut test_fs = TestFs::default();
         test_fs.add_text_file("/somefolder/filepath", "test");
-
 
         let file_hash = FileEntry {
             relative_path: PathBuf::from("filepath"),

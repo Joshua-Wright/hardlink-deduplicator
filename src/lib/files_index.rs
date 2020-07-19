@@ -24,7 +24,8 @@ fn group_by_size(entries: &[FileEntry]) -> HashMap<u64, Vec<usize>> {
     out
 }
 
-
+// invariant: all files in the files index are already deduplicated: they are either unique or they
+// have the same unique_id
 pub struct FilesIndex<'a> {
     entries: &'a [FileEntry<'a>],
     by_path: HashMap<PathBuf, usize>,
@@ -52,11 +53,11 @@ impl<'a> FilesIndex<'a> {
     }
 }
 
+
 #[cfg(test)]
 mod test {
     use std::path::Path;
 
-    use crate::lib::file_entry::FileEntry;
     use crate::lib::files_index::FilesIndex;
     use crate::lib::fs::TestFs;
 
@@ -67,15 +68,10 @@ mod test {
         let base_path = Path::new("/somefolder/");
         test_fs.set_cwd(base_path);
 
-        let mut make_file_entry = |path: &'static str| -> FileEntry {
-            test_fs.add_text_file(path, "test");
-            FileEntry::new(&test_fs, base_path, Path::new(path)).unwrap()
-        };
-
         let file_entries = vec![
-            make_file_entry("/somefolder/asdf"),
-            make_file_entry("/somefolder/asdf2"),
-            make_file_entry("/somefolder/newfile"),
+            test_fs.new_file_entry("/somefolder/asdf", "test"),
+            test_fs.new_file_entry("/somefolder/asdf2", "asdf"),
+            test_fs.new_file_entry("/somefolder/newfile", "newf"),
         ];
 
         let index = FilesIndex::from_entries(&file_entries);
