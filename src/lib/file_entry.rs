@@ -18,6 +18,7 @@ pub struct FileEntry<'a> {
     pub sha256_hash: Option<&'a str>,
     // unique_id is used to disambiguate files with the same fast_hash
     pub unique_id: Option<u64>,
+    // TODO: make these stats non-optional
     pub stat_size: Option<u64>,
     pub stat_modified: Option<SystemTime>,
     pub stat_accessed: Option<SystemTime>,
@@ -31,18 +32,21 @@ impl<'a> FileEntry<'a> {
         let absolute_path: PathBuf = fs.canonicalize(path)?;
         let relative_path = absolute_path.strip_prefix(base_path)?;
         let relative_folder = relative_path.parent().ok_or("error finding relative folder")?;
+
+        let (size, modified, accessed, created, inode) = fs.metadata(&absolute_path)?;
+
         Ok(Self {
             relative_path: relative_path.to_owned(),
             relative_folder: relative_folder.to_owned(),
             absolute_path: absolute_path.clone(),
             fast_hash: None,
             sha256_hash: None,
-            stat_size: None,
             unique_id: None,
-            stat_modified: None,
-            stat_accessed: None,
-            stat_created: None,
-            stat_inode: None,
+            stat_size: Some(size),
+            stat_modified: Some(modified),
+            stat_accessed: Some(accessed),
+            stat_created: Some(created),
+            stat_inode: Some(inode),
         })
     }
 
@@ -73,6 +77,7 @@ mod test {
         assert_eq!(file_hash.relative_folder, Path::new(""));
 
 
+        test_fs.add_text_file("/somefolder/subfolder/file", "test");
         let file_hash = FileEntry::new(
             &test_fs,
             Path::new("/somefolder/"),

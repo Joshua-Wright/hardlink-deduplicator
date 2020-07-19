@@ -69,26 +69,25 @@ mod test {
         let base_path = Path::new("/somefolder/");
         test_fs.set_cwd(base_path);
 
-        let make_file_entry = |path: &str| -> FileEntry {
+        let mut make_file_entry = |path: &'static str| -> FileEntry {
+            test_fs.add_text_file(path, "test");
             FileEntry::new(&test_fs, base_path, Path::new(path)).unwrap()
         };
 
         let file_entries = vec![
-            make_file_entry("asdf"),
-            make_file_entry("asdf2"),
-            make_file_entry("newfile"),
+            make_file_entry("/somefolder/asdf"),
+            make_file_entry("/somefolder/asdf2"),
+            make_file_entry("/somefolder/newfile"),
         ];
 
         let index = FilesIndex::from_entries(&file_entries);
         assert_eq!(index.entries.len(), 3);
         assert_eq!(index.by_path.len(), 3);
-        // nothing here has stat
-        assert_eq!(index.by_size.len(), 0);
+        assert_eq!(index.by_size.len(), 1);
 
         assert_eq!(index.get_by_path(&"asdf").unwrap(), &file_entries[0]);
         assert_eq!(index.get_by_path(&"asdf2").unwrap(), &file_entries[1]);
         assert_eq!(index.get_by_path(&"newfile").unwrap(), &file_entries[2]);
-
     }
 }
 

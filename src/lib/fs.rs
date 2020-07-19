@@ -120,7 +120,19 @@ impl<'a> AbstractFs for TestFs<'a> {
         }
     }
 
+    // size, modified, accessed, created, inode
     fn metadata<P: AsRef<Path>>(&self, path: P) -> Result<(u64, SystemTime, SystemTime, SystemTime, u64)> {
-        unimplemented!()
+        println!("{:?}", self.filedata);
+        let path_str = path.as_ref().to_string_lossy();
+        let buf = self.filedata.get(path_str.as_ref())
+            .ok_or(Error::Generic(format!("file {:?} not found", path_str)))?;
+        Ok((
+            buf.len() as u64,
+            SystemTime::now(),
+            SystemTime::now(),
+            SystemTime::now(),
+            // TODO
+            0 as u64
+        ))
     }
 }
