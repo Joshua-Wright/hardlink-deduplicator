@@ -17,12 +17,11 @@ pub struct FileEntry<'a> {
     pub sha256_hash: Option<&'a str>,
     // unique_id is used to disambiguate files with the same fast_hash
     pub unique_id: Option<u64>,
-    // TODO: make these stats non-optional
-    pub stat_size: Option<u64>,
-    pub stat_modified: Option<SystemTime>,
-    pub stat_accessed: Option<SystemTime>,
-    pub stat_created: Option<SystemTime>,
-    pub stat_inode: Option<u64>,
+    pub stat_size: u64,
+    pub stat_modified: SystemTime,
+    pub stat_accessed: SystemTime,
+    pub stat_created: SystemTime,
+    pub stat_inode: u64,
 }
 
 impl<'a> FileEntry<'a> {
@@ -41,11 +40,11 @@ impl<'a> FileEntry<'a> {
             fast_hash: None,
             sha256_hash: None,
             unique_id: None,
-            stat_size: Some(size),
-            stat_modified: Some(modified),
-            stat_accessed: Some(accessed),
-            stat_created: Some(created),
-            stat_inode: Some(inode),
+            stat_size: size,
+            stat_modified: modified,
+            stat_accessed: accessed,
+            stat_created: created,
+            stat_inode: inode,
         })
     }
 
@@ -64,6 +63,7 @@ mod test {
 
     use crate::lib::file_entry::FileEntry;
     use crate::lib::fs::{Path, TestFs};
+    use std::time::SystemTime;
 
     #[test]
     fn test_new_file_entry() {
@@ -100,12 +100,12 @@ mod test {
             absolute_path: PathBuf::from("/somefolder/filepath"),
             fast_hash: None,
             sha256_hash: None,
-            stat_size: None,
             unique_id: None,
-            stat_modified: None,
-            stat_accessed: None,
-            stat_created: None,
-            stat_inode: None,
+            stat_size: 1,
+            stat_modified: SystemTime::now(),
+            stat_accessed: SystemTime::now(),
+            stat_created: SystemTime::now(),
+            stat_inode: 1,
         };
 
         assert_eq!(file_hash.fast_hash, None);

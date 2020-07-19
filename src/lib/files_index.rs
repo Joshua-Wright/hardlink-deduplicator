@@ -16,10 +16,7 @@ enum FileEntryKey {
 fn group_by_size(entries: &[FileEntry]) -> HashMap<u64, Vec<usize>> {
     let mut out: HashMap<u64, Vec<usize>, RandomState> = HashMap::new();
     for (i, e) in entries.iter().enumerate() {
-        let size = match e.stat_size {
-            None => continue,
-            Some(x) => x,
-        };
+        let size = e.stat_size;
         out.entry(size)
             .or_default()
             .push(i)
