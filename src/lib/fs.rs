@@ -65,6 +65,7 @@ impl AbstractFs for RealFs {
 #[derive(Debug, Default)]
 pub struct TestFs<'a> {
     filedata: std::collections::HashMap<&'a str, &'a [u8]>,
+    inodes: std::collections::HashMap<&'a str, u64>,
     cwd: PathBuf,
     count: UnsafeCell<i64>,
 }
@@ -78,9 +79,20 @@ impl<'a> TestFs<'a> {
             filedata: files.to_owned().iter()
                 .map(|(a, b)| (a.to_owned(), b.to_owned().as_bytes()))
                 .collect(),
+            // default to everything is a unique inode
+            inodes: files.to_owned().iter()
+                .enumerate()
+                .map(|(i, (a, _))| (a.to_owned(), (i+1) as u64))
+                .collect(),
             cwd: PathBuf::from("/"),
             count: UnsafeCell::new(0),
         }
+    }
+
+    fn next_inode(&self) -> u64 {
+        self.inodes.values().max()
+            .cloned()
+            .unwrap_or(1u64) + 1
     }
 
     pub fn set_cwd<P: AsRef<Path>>(&mut self, path: P) {
@@ -89,10 +101,12 @@ impl<'a> TestFs<'a> {
 
     pub fn add_text_file(&mut self, filename: &'static str, filedata: &'static str) {
         self.filedata.insert(filename, filedata.as_bytes());
+        self.inodes.insert(filename, self.next_inode());
     }
 
     pub fn add_binary_file(&mut self, filename: &'static str, filedata: &'static [u8]) {
         self.filedata.insert(filename, filedata);
+        self.inodes.insert(filename, self.next_inode());
     }
 }
 
@@ -122,17 +136,16 @@ impl<'a> AbstractFs for TestFs<'a> {
 
     // size, modified, accessed, created, inode
     fn metadata<P: AsRef<Path>>(&self, path: P) -> Result<(u64, SystemTime, SystemTime, SystemTime, u64)> {
-        println!("{:?}", self.filedata);
         let path_str = path.as_ref().to_string_lossy();
         let buf = self.filedata.get(path_str.as_ref())
             .ok_or(Error::Generic(format!("file {:?} not found", path_str)))?;
+        let inode = self.inodes.get(path_str.as_ref()).ok_or(Error::Generic(format!("file {:?} not found", path_str)))?;
         Ok((
             buf.len() as u64,
             SystemTime::now(),
             SystemTime::now(),
             SystemTime::now(),
-            // TODO
-            0 as u64
+            inode.clone(),
         ))
     }
 }
