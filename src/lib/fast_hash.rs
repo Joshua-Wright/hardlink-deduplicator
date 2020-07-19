@@ -10,7 +10,6 @@ use super::fs;
 use super::fs::AbstractFs;
 use super::Result;
 
-
 pub fn hash_file<Fs: AbstractFs>(fs: &Fs, path: &Path) -> Result<u128> {
     let mut file = fs.open(path)?;
 

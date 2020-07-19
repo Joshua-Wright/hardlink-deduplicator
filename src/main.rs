@@ -1,10 +1,10 @@
 extern crate fasthash;
 extern crate walkdir;
 
-use walkdir::WalkDir;
+// use walkdir::WalkDir;
 
-use lib::fast_hash::*;
-use lib::fs::RealFs;
+// use lib::fast_hash::*;
+// use lib::fs::RealFs;
 
 mod lib;
 

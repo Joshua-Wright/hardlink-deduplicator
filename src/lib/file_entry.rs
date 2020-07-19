@@ -1,12 +1,11 @@
-use std::path::{Path, PathBuf};
 use std::option::Option;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use super::Result;
+
+use crate::lib::fast_hash::hash_file;
 
 use super::fs;
-use crate::lib::fast_hash::hash_file;
-use crate::lib::fs::io::{Error, ErrorKind};
-
+use super::Result;
 
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub struct FileEntry<'a> {
@@ -61,9 +60,10 @@ impl<'a> FileEntry<'a> {
 
 #[cfg(test)]
 mod test {
-    use crate::lib::fs::{TestFs, Path};
-    use crate::lib::file_entry::FileEntry;
     use std::path::PathBuf;
+
+    use crate::lib::file_entry::FileEntry;
+    use crate::lib::fs::{Path, TestFs};
 
     #[test]
     fn test_new_file_entry() {

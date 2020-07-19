@@ -1,16 +1,15 @@
+////////////////////////////////////////////////////////////////////////////////////////////////////
+#[cfg(test)]
+use std::cell::UnsafeCell;
+#[cfg(not(test))]
+use std::fs::Metadata;
 pub use std::io;
 pub use std::path::Path;
 use std::path::PathBuf;
-use super::Result;
-use super::Error;
-
-use mockall::*;
-use mockall::predicate::*;
-use std::ops::{DerefMut};
-use std::borrow::{BorrowMut, Borrow};
-use std::cell::UnsafeCell;
-use std::fs::Metadata;
 use std::time::SystemTime;
+
+use super::Error;
+use super::Result;
 
 pub trait AbstractFs {
     type File: std::io::Read;
@@ -59,14 +58,13 @@ impl AbstractFs for RealFs {
 }
 
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[derive(Debug, Default)]
 pub struct TestFs<'a> {
     filedata: std::collections::HashMap<&'a str, &'a [u8]>,
     inodes: std::collections::HashMap<&'a str, u64>,
     cwd: PathBuf,
+    // TODO: turn this into a function call log or something like that
     count: UnsafeCell<i64>,
 }
 
@@ -82,7 +80,7 @@ impl<'a> TestFs<'a> {
             // default to everything is a unique inode
             inodes: files.to_owned().iter()
                 .enumerate()
-                .map(|(i, (a, _))| (a.to_owned(), (i+1) as u64))
+                .map(|(i, (a, _))| (a.to_owned(), (i + 1) as u64))
                 .collect(),
             cwd: PathBuf::from("/"),
             count: UnsafeCell::new(0),
@@ -115,7 +113,6 @@ impl<'a> AbstractFs for TestFs<'a> {
     type File = std::io::Cursor<Box<[u8]>>;
 
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
-        use std::io::ErrorKind;
         match self.filedata.get(&path.as_ref().to_string_lossy().as_ref()) {
             None => Err("File not found".into()),
             Some(s) => Ok(std::io::Cursor::new(s.to_vec().into_boxed_slice())),

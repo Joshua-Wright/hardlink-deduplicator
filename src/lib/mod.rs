@@ -4,9 +4,6 @@ pub mod fast_hash;
 pub mod file_entry;
 
 
-use std::io::Result as IOResult;
-use std::path::StripPrefixError;
-
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
@@ -30,7 +27,7 @@ impl From<&str> for Error {
 
 
 impl From<std::path::StripPrefixError> for Error {
-    fn from(e: StripPrefixError) -> Self {
+    fn from(e: std::path::StripPrefixError) -> Self {
         Error::StripPrefixError(e)
     }
 }
@@ -40,16 +37,3 @@ impl From<std::io::Error> for Error {
         Error::IO(e)
     }
 }
-
-
-
-// impl<T> Result<T> {
-//     fn from_option(o: Option<T>, msg: String) -> Self {
-//         o.ok_or(msg)
-//     }
-// }
-// impl<T> From<IOResult<T>> for Result<T> {
-//     fn from(r: IOResult<T>) -> Self {
-//         r.map_err(|e| e.to_string())
-//     }
-// }

@@ -1,10 +1,10 @@
-use std::path::{Path, PathBuf};
-use std::option::Option;
-use std::collections::HashMap;
-
-use super::file_entry::FileEntry;
 use std::borrow::Borrow;
 use std::collections::hash_map::RandomState;
+use std::collections::HashMap;
+use std::option::Option;
+use std::path::{Path, PathBuf};
+
+use super::file_entry::FileEntry;
 
 #[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
 enum FileEntryKey {
@@ -57,10 +57,11 @@ impl<'a> FilesIndex<'a> {
 
 #[cfg(test)]
 mod test {
-    use std::path::{PathBuf, Path};
+    use std::path::Path;
+
     use crate::lib::file_entry::FileEntry;
-    use crate::lib::fs::TestFs;
     use crate::lib::files_index::FilesIndex;
+    use crate::lib::fs::TestFs;
 
     #[test]
     pub fn test_construct() {
