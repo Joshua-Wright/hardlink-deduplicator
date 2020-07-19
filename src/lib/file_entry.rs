@@ -13,14 +13,11 @@ pub struct FileEntry {
     pub relative_folder: PathBuf,
     pub absolute_path: PathBuf,
     pub fast_hash: Option<u128>,
-    // TODO: make this a numeric?
-    pub sha256_hash: Option<String>,
-    // unique_id is used to disambiguate files with the same fast_hash
-    pub unique_id: Option<u64>,
     pub stat_size: u64,
     pub stat_modified: SystemTime,
     pub stat_accessed: SystemTime,
     pub stat_created: SystemTime,
+    // in the case of non-duplicate files with the same size and hash, the inode resolves the duplicates
     pub stat_inode: u64,
 }
 
@@ -38,8 +35,6 @@ impl FileEntry {
             relative_folder: relative_folder.to_owned(),
             absolute_path: absolute_path.clone(),
             fast_hash: None,
-            sha256_hash: None,
-            unique_id: None,
             stat_size: size,
             stat_modified: modified,
             stat_accessed: accessed,
@@ -99,8 +94,6 @@ mod test {
             relative_folder: PathBuf::from("."),
             absolute_path: PathBuf::from("/somefolder/filepath"),
             fast_hash: None,
-            sha256_hash: None,
-            unique_id: None,
             stat_size: 1,
             stat_modified: SystemTime::now(),
             stat_accessed: SystemTime::now(),
