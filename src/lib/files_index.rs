@@ -32,9 +32,9 @@ fn group_by<T: Hash + Eq, F>(entries: &[FileEntry], f: F) -> HashMap<T, HashSet<
 
 // invariant: all files in the files index are already deduplicated: they are either unique or they
 // have the same inode
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct FilesIndex {
-    // TODO: put base path here instead of in the FileEntry?
+    base_path: PathBuf,
     entries: Vec<FileEntry>,
     by_relative_path: HashMap<PathBuf, usize>,
     by_size: HashMap<u64, HashSet<usize>>,
@@ -42,13 +42,26 @@ pub struct FilesIndex {
 }
 
 impl FilesIndex {
-    fn from_entries(entries: &[FileEntry]) -> Self {
+
+    fn new<P: AsRef<Path>>(base_path: P) -> Self {
+        // TODO: look for index file and read it, I guess
+        Self {
+            base_path: base_path.as_ref().to_path_buf(),
+            entries: Default::default(),
+            by_relative_path: Default::default(),
+            by_size: Default::default(),
+            by_inode: Default::default()
+        }
+    }
+
+    fn from_entries<P: AsRef<Path>>(base_path: P, entries: &[FileEntry]) -> Self {
         let by_path = entries.iter()
             .enumerate()
             .map(|(i, e)| (e.relative_path.to_owned(), i))
             .collect();
 
         Self {
+            base_path: base_path.as_ref().to_path_buf(),
             entries: entries.to_vec(),
             by_relative_path: by_path,
             // by_size: group_by_size(entries),
@@ -81,8 +94,8 @@ impl FilesIndex {
         &self.entries[idx]
     }
 
-    pub fn add_file<'a, Fs: AbstractFs>(&'a mut self, fs: &Fs, base_path: &Path, path: &Path) -> Result<&'a FileEntry> {
-        let new_entry = FileEntry::new(fs, base_path.as_ref(), path.as_ref())?;
+    pub fn add_file<Fs: AbstractFs, P: AsRef<Path>>(&mut self, fs: &Fs, relative_path: P) -> Result<&FileEntry> {
+        let new_entry = FileEntry::new(fs, &self.base_path, relative_path)?;
 
         if self.by_inode.contains_key(&new_entry.stat_inode) {
             // this file is already deduplicated into this index
@@ -120,14 +133,13 @@ impl FilesIndex {
         }
         // if we get this far, then that means we didn't find any matches, and this file is unique
         return Ok(self.insert_or_overwrite_file_entry(&new_entry));
-        unimplemented!()
     }
 
 
     fn compare_files<Fs: AbstractFs>(&self, fs: &Fs, entry1: &FileEntry, entry2: &FileEntry) -> Result<(bool, Option<(FileEntry, FileEntry)>)> {
         const BUFSIZE: usize = 4096;
-        let mut file1 = fs.open(&entry1.absolute_path)?;
-        let mut file2 = fs.open(&entry2.absolute_path)?;
+        let mut file1 = fs.open(&entry1.absolute_path(&self.base_path))?;
+        let mut file2 = fs.open(&entry2.absolute_path(&self.base_path))?;
         let mut reader1 = BufReader::with_capacity(BUFSIZE, file1);
         let mut reader2 = BufReader::with_capacity(BUFSIZE, file2);
 
@@ -192,7 +204,7 @@ mod test {
             test_fs.new_file_entry("/somefolder/newfile", "newf"),
         ];
 
-        let index = FilesIndex::from_entries(&file_entries);
+        let index = FilesIndex::from_entries("/somefolder/", &file_entries);
         assert_eq!(index.entries.len(), 3);
         assert_eq!(index.by_relative_path.len(), 3);
         assert_eq!(index.by_size.len(), 1);
@@ -209,10 +221,10 @@ mod test {
         let base_path = Path::new("/somefolder/");
         test_fs.set_cwd(base_path);
 
-        let mut index = FilesIndex::default();
+        let mut index = FilesIndex::new(base_path);
 
         let f1 = test_fs.new_file_entry("/somefolder/asdf", "test");
-        index.add_file(&test_fs, base_path.borrow(), f1.relative_path.as_path()).unwrap();
+        index.add_file(&test_fs,f1.relative_path.as_path()).unwrap();
         assert_eq!(index.get_by_relative_path(&f1.relative_path.as_path()).unwrap(), &f1);
         assert_eq!(index.entries.len(), 1);
         assert_eq!(index.by_relative_path.len(), 1);
@@ -220,7 +232,7 @@ mod test {
 
 
         let f2 = test_fs.new_file_entry("/somefolder/asdfasdf", "testasdf");
-        index.add_file(&test_fs, base_path.borrow(), f2.relative_path.as_path()).unwrap();
+        index.add_file(&test_fs,f2.relative_path.as_path()).unwrap();
         assert_eq!(index.get_by_relative_path(&f2.relative_path.as_path()).unwrap(), &f2);
         assert_eq!(index.entries.len(), 2);
         assert_eq!(index.by_relative_path.len(), 2);
@@ -229,8 +241,8 @@ mod test {
         // test with adding two un-equal files with the same size
         let f1 = test_fs.new_file_entry("/somefolder/test1", "test1 asdf asdf");
         let f2 = test_fs.new_file_entry("/somefolder/test2", "test2 asdf asdf");
-        index.add_file(&test_fs, base_path.borrow(), f1.relative_path.as_path()).unwrap();
-        index.add_file(&test_fs, base_path.borrow(), f2.relative_path.as_path()).unwrap();
+        index.add_file(&test_fs,f1.relative_path.as_path()).unwrap();
+        index.add_file(&test_fs,f2.relative_path.as_path()).unwrap();
         assert_eq!(index.by_size.len(), 3);
         assert_eq!(index.by_size.get(&15).unwrap().len(), 2);
     }
@@ -242,12 +254,12 @@ mod test {
         let base_path = Path::new("/somefolder/");
         test_fs.set_cwd(base_path);
 
-        let mut index = FilesIndex::default();
+        let mut index = FilesIndex::new(base_path);
 
         let f1 = test_fs.new_file_entry("/somefolder/test1", "asdf");
         let f2 = test_fs.new_file_entry("/somefolder/test2", "asdf");
-        index.add_file(&test_fs, base_path.borrow(), f1.relative_path.as_path()).unwrap();
-        index.add_file(&test_fs, base_path.borrow(), f2.relative_path.as_path()).unwrap();
+        index.add_file(&test_fs,f1.relative_path.as_path()).unwrap();
+        index.add_file(&test_fs,f2.relative_path.as_path()).unwrap();
     }
 }
 
