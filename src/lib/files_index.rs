@@ -1,4 +1,3 @@
-use std::borrow::Borrow;
 use std::collections::hash_map::RandomState;
 use std::collections::{HashMap, HashSet};
 use std::option::Option;
@@ -12,23 +11,32 @@ use crate::lib::Result;
 use std::hash::{Hash, Hasher};
 use fasthash::{murmur3, HasherExt};
 
-#[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
-enum FileEntryKey {
-    SizeOnly { size: u64 },
-    FullKey { size: u64, fast_hash: u128, unique_id: u64 },
-}
+
+// TODO delete this
+// #[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
+// enum FileEntryKey {
+//     SizeOnly { size: u64 },
+//     FullKey { size: u64, fast_hash: u128, unique_id: u64 },
+// }
 
 
-fn group_by<T: Hash + Eq, F>(entries: &[FileEntry], f: F) -> HashMap<T, HashSet<usize>> where F: Fn(&FileEntry) -> T {
-    let mut out: HashMap<T, HashSet<usize>, RandomState> = HashMap::new();
-    for (i, e) in entries.iter().enumerate() {
-        let size = f(e);
-        out.entry(size)
+fn group_by_with_value_func<C, KF, VF, K, V>(entries: C, key_func: KF, value_func: VF) -> HashMap<K, HashSet<V>>
+    where C: IntoIterator, KF: Fn(&C::Item) -> K, VF: Fn(usize, &C::Item) -> V, K: Hash + Eq, V: Hash + Eq
+{
+    let mut out: HashMap<K, HashSet<V>, RandomState> = HashMap::new();
+    for (i, e) in entries.into_iter().enumerate() {
+        out.entry(key_func(&e))
             .or_default()
-            .insert(i);
+            .insert(value_func(i, &e));
     }
     out
 }
+
+fn group_by<C: IntoIterator, KF, K: Hash + Eq>(entries: C, f: KF) -> HashMap<K, HashSet<usize>>
+    where KF: Fn(&C::Item) -> K {
+    group_by_with_value_func(entries, f, |i, _| i)
+}
+
 
 // invariant: all files in the files index are already deduplicated: they are either unique or they
 // have the same inode
@@ -39,10 +47,12 @@ pub struct FilesIndex {
     by_relative_path: HashMap<PathBuf, usize>,
     by_size: HashMap<u64, HashSet<usize>>,
     by_inode: HashMap<u64, HashSet<usize>>,
+    by_hash: HashMap<u128, HashSet<usize>>,
+    inode_by_size: HashMap<u64, HashSet<u64>>,
+    inode_by_hash: HashMap<u128, HashSet<u64>>,
 }
 
 impl FilesIndex {
-
     fn new<P: AsRef<Path>>(base_path: P) -> Self {
         // TODO: look for index file and read it, I guess
         Self {
@@ -50,7 +60,10 @@ impl FilesIndex {
             entries: Default::default(),
             by_relative_path: Default::default(),
             by_size: Default::default(),
-            by_inode: Default::default()
+            by_inode: Default::default(),
+            by_hash: Default::default(),
+            inode_by_size: Default::default(),
+            inode_by_hash: Default::default(),
         }
     }
 
@@ -64,16 +77,29 @@ impl FilesIndex {
             base_path: base_path.as_ref().to_path_buf(),
             entries: entries.to_vec(),
             by_relative_path: by_path,
-            // by_size: group_by_size(entries),
             by_size: group_by(entries, |e| e.stat_size),
             by_inode: group_by(entries, |e| e.stat_inode),
+            by_hash: group_by(
+                entries.iter().filter(|e| e.fast_hash.is_some()),
+                |e| e.fast_hash.unwrap()
+            ),
+            inode_by_size: group_by_with_value_func(
+                entries.iter().filter(|e| e.fast_hash.is_some()),
+                |e| e.stat_size,
+                |_, e| e.stat_inode,
+            ),
+            inode_by_hash: group_by_with_value_func(
+                entries.iter().filter(|e| e.fast_hash.is_some()),
+                |e| e.fast_hash.unwrap(),
+                |_, e| e.stat_inode,
+            ),
         }
     }
 
 
     pub fn get_by_relative_path<P: AsRef<Path>>(&self, relative_path: &P) -> Option<&FileEntry> {
         self.by_relative_path.get(relative_path.as_ref())
-            .map(|&i| { self.entries[i].borrow() })
+            .map(|&i| { &self.entries[i] })
     }
 
     pub fn insert_or_overwrite_file_entry(&mut self, file_entry: &FileEntry) -> &FileEntry {
@@ -91,6 +117,11 @@ impl FilesIndex {
         self.by_relative_path.insert(file_entry.relative_path.to_owned(), idx);
         self.by_size.entry(file_entry.stat_size).or_default().insert(idx);
         self.by_inode.entry(file_entry.stat_inode).or_default().insert(idx);
+        self.inode_by_size.entry(file_entry.stat_size).or_default().insert(file_entry.stat_inode);
+        if let Some(hash) = file_entry.fast_hash {
+            self.by_hash.entry(hash).or_default().insert(idx);
+            self.inode_by_hash.entry(hash).or_default().insert(file_entry.stat_inode);
+        }
         &self.entries[idx]
     }
 
@@ -114,8 +145,8 @@ impl FilesIndex {
             let existing_entry = &self.entries[idx];
             match self.compare_files(fs, existing_entry, &new_entry)? {
                 (false, _) => {
-                    continue
-                },
+                    continue;
+                }
                 (true, Some((e1, e2))) => {
                     // match found!
                     if e1.stat_inode == e2.stat_inode {
@@ -128,7 +159,7 @@ impl FilesIndex {
                         unimplemented!()
                     }
                 }
-                _ => {unreachable!()}
+                _ => { unreachable!() }
             }
         }
         // if we get this far, then that means we didn't find any matches, and this file is unique
@@ -138,8 +169,8 @@ impl FilesIndex {
 
     fn compare_files<Fs: AbstractFs>(&self, fs: &Fs, entry1: &FileEntry, entry2: &FileEntry) -> Result<(bool, Option<(FileEntry, FileEntry)>)> {
         const BUFSIZE: usize = 4096;
-        let mut file1 = fs.open(&entry1.absolute_path(&self.base_path))?;
-        let mut file2 = fs.open(&entry2.absolute_path(&self.base_path))?;
+        let file1 = fs.open(&entry1.absolute_path(&self.base_path))?;
+        let file2 = fs.open(&entry2.absolute_path(&self.base_path))?;
         let mut reader1 = BufReader::with_capacity(BUFSIZE, file1);
         let mut reader2 = BufReader::with_capacity(BUFSIZE, file2);
 
@@ -189,7 +220,6 @@ mod test {
 
     use crate::lib::files_index::FilesIndex;
     use crate::lib::fs::TestFs;
-    use std::borrow::Borrow;
 
     #[test]
     pub fn test_construct() {
@@ -224,7 +254,7 @@ mod test {
         let mut index = FilesIndex::new(base_path);
 
         let f1 = test_fs.new_file_entry("/somefolder/asdf", "test");
-        index.add_file(&test_fs,f1.relative_path.as_path()).unwrap();
+        index.add_file(&test_fs, f1.relative_path.as_path()).unwrap();
         assert_eq!(index.get_by_relative_path(&f1.relative_path.as_path()).unwrap(), &f1);
         assert_eq!(index.entries.len(), 1);
         assert_eq!(index.by_relative_path.len(), 1);
@@ -232,7 +262,7 @@ mod test {
 
 
         let f2 = test_fs.new_file_entry("/somefolder/asdfasdf", "testasdf");
-        index.add_file(&test_fs,f2.relative_path.as_path()).unwrap();
+        index.add_file(&test_fs, f2.relative_path.as_path()).unwrap();
         assert_eq!(index.get_by_relative_path(&f2.relative_path.as_path()).unwrap(), &f2);
         assert_eq!(index.entries.len(), 2);
         assert_eq!(index.by_relative_path.len(), 2);
@@ -241,8 +271,8 @@ mod test {
         // test with adding two un-equal files with the same size
         let f1 = test_fs.new_file_entry("/somefolder/test1", "test1 asdf asdf");
         let f2 = test_fs.new_file_entry("/somefolder/test2", "test2 asdf asdf");
-        index.add_file(&test_fs,f1.relative_path.as_path()).unwrap();
-        index.add_file(&test_fs,f2.relative_path.as_path()).unwrap();
+        index.add_file(&test_fs, f1.relative_path.as_path()).unwrap();
+        index.add_file(&test_fs, f2.relative_path.as_path()).unwrap();
         assert_eq!(index.by_size.len(), 3);
         assert_eq!(index.by_size.get(&15).unwrap().len(), 2);
     }
@@ -258,8 +288,8 @@ mod test {
 
         let f1 = test_fs.new_file_entry("/somefolder/test1", "asdf");
         let f2 = test_fs.new_file_entry("/somefolder/test2", "asdf");
-        index.add_file(&test_fs,f1.relative_path.as_path()).unwrap();
-        index.add_file(&test_fs,f2.relative_path.as_path()).unwrap();
+        index.add_file(&test_fs, f1.relative_path.as_path()).unwrap();
+        index.add_file(&test_fs, f2.relative_path.as_path()).unwrap();
     }
 }
 

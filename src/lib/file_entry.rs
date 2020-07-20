@@ -2,8 +2,6 @@ use std::option::Option;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::lib::fast_hash::hash_file;
-
 use super::fs;
 use super::Result;
 
@@ -51,11 +49,11 @@ impl FileEntry {
 
 #[cfg(test)]
 mod test {
-    use std::path::PathBuf;
+    use std::path::Path;
 
     use crate::lib::file_entry::FileEntry;
-    use crate::lib::fs::{Path, TestFs};
-    use std::time::SystemTime;
+    use crate::lib::fs::TestFs;
+
 
     #[test]
     fn test_new_file_entry() {

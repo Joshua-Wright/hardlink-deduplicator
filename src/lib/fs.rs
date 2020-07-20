@@ -4,9 +4,6 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use super::Result;
-use std::borrow::Borrow;
-use std::collections::HashMap;
-use std::collections::hash_map::RandomState;
 
 pub trait AbstractFs {
     type File: std::io::Read;
@@ -34,6 +31,7 @@ cfg_if::cfg_if! {
     if #[cfg(test)] {
         use std::cell::UnsafeCell;
         use std::ops::Deref;
+        use std::collections::HashMap;
         use super::Error;
     }
 }
