@@ -81,10 +81,10 @@ impl FilesIndex {
             by_inode: group_by(entries, |e| e.stat_inode),
             by_hash: group_by(
                 entries.iter().filter(|e| e.fast_hash.is_some()),
-                |e| e.fast_hash.unwrap()
+                |e| e.fast_hash.unwrap(),
             ),
             inode_by_size: group_by_with_value_func(
-                entries.iter().filter(|e| e.fast_hash.is_some()),
+                entries,
                 |e| e.stat_size,
                 |_, e| e.stat_inode,
             ),
@@ -93,6 +93,60 @@ impl FilesIndex {
                 |e| e.fast_hash.unwrap(),
                 |_, e| e.stat_inode,
             ),
+        }
+    }
+
+    pub fn sanity_check(&self) {
+        // check starting from the file entries
+        for (i, entry) in self.entries.iter().enumerate() {
+            assert!(self.by_relative_path.get(&entry.relative_path).unwrap() == &i);
+            assert!(self.by_size.get(&entry.stat_size).unwrap().contains(&i));
+            assert!(self.by_inode.get(&entry.stat_inode).unwrap().contains(&i));
+            assert!(self.inode_by_size.get(&entry.stat_size).unwrap().contains(&entry.stat_inode));
+            if let Some(hash) = entry.fast_hash {
+                assert!(self.by_hash.get(&hash).unwrap().contains(&i));
+                assert!(self.inode_by_hash.get(&hash).unwrap().contains(&entry.stat_inode));
+            }
+        }
+
+        // and now check starting from the indexes
+        self.by_size.iter()
+            .flat_map(|(key, idxs)|
+                idxs
+                    .iter()
+                    .map(move |&idx| (key, idx))
+            )
+            .map(|(key, idx)| (key, &self.entries[idx]))
+            .for_each(|(key, entry)| {
+                assert_eq!(key, &entry.stat_size);
+            });
+        self.by_inode.iter()
+            .flat_map(|(key, idxs)|
+                idxs
+                    .iter()
+                    .map(move |&idx| (key, idx))
+            )
+            .map(|(key, idx)| (key, &self.entries[idx]))
+            .for_each(|(key, entry)| {
+                assert_eq!(key, &entry.stat_inode);
+            });
+        self.by_hash.iter()
+            .flat_map(|(key, idxs)|
+                idxs
+                    .iter()
+                    .map(move |&idx| (key, idx))
+            )
+            .map(|(key, idx)| (key, &self.entries[idx]))
+            .for_each(|(key, entry)| {
+                assert_eq!(key, &entry.fast_hash.unwrap());
+            });
+
+        // and check that the hashes are consistent, just to make sure
+        for (_, idxs) in self.by_inode.iter() {
+            let hashes: HashSet<_> = idxs.iter()
+                .map(|&i| &self.entries[i].fast_hash)
+                .collect();
+            assert_eq!(hashes.len(), 1);
         }
     }
 
@@ -124,6 +178,28 @@ impl FilesIndex {
         }
         &self.entries[idx]
     }
+
+    // TODO: get this to work
+    // pub fn add_file_if_trivial_unique(&mut self, new_entry: &FileEntry) -> Option<&FileEntry> {
+    //     // this file is already deduplicated into this index
+    //     if let Some(existing) = self.by_inode.get(&new_entry.stat_inode) {
+    //         // grab the hash, if possible
+    //         let &idx = existing.iter().next().unwrap();
+    //         let fast_hash = self.entries[idx].fast_hash;
+    //         return self.insert_or_overwrite_file_entry(
+    //             &FileEntry {
+    //                 fast_hash: fast_hash,
+    //                 ..new_entry.clone()
+    //             }
+    //         ).into();
+    //     }
+    //
+    //     if !self.by_size.contains_key(&new_entry.stat_size) {
+    //         // this file is unique because nothing in the index could match this file by length
+    //         return self.insert_or_overwrite_file_entry(&new_entry).into();
+    //     }
+    //     None
+    // }
 
     pub fn add_file<Fs: AbstractFs, P: AsRef<Path>>(&mut self, fs: &Fs, relative_path: P) -> Result<&FileEntry> {
         let new_entry = FileEntry::new(fs, &self.base_path, relative_path)?;
@@ -242,6 +318,8 @@ mod test {
         assert_eq!(index.get_by_relative_path(&"asdf").unwrap(), &file_entries[0]);
         assert_eq!(index.get_by_relative_path(&"asdf2").unwrap(), &file_entries[1]);
         assert_eq!(index.get_by_relative_path(&"newfile").unwrap(), &file_entries[2]);
+
+        index.sanity_check();
     }
 
 
@@ -275,6 +353,8 @@ mod test {
         index.add_file(&test_fs, f2.relative_path.as_path()).unwrap();
         assert_eq!(index.by_size.len(), 3);
         assert_eq!(index.by_size.get(&15).unwrap().len(), 2);
+
+        index.sanity_check();
     }
 
     #[test]
