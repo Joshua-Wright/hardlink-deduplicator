@@ -10,6 +10,7 @@ use crate::lib::fs::AbstractFs;
 use crate::lib::Result;
 use std::hash::{Hash, Hasher};
 use fasthash::{murmur3, HasherExt};
+use crate::lib::fast_hash::hash_file;
 
 
 fn group_by_with_value_func<C, KF, VF, K, V>(entries: C, key_func: KF, value_func: VF) -> HashMap<K, HashSet<V>>
@@ -284,22 +285,30 @@ impl FilesIndex {
             }
         }
 
+        // file is non-unique in length, so we will now hash the whole thing
+        new_entry.fast_hash = Some(hash_file(fs, &new_entry.absolute_path(&self.base_path))?);
+
+        // now compare by hash to insert
+        let potential_dupes = match self.by_size.get(&new_entry.stat_size) {
+            None => {
+                // no duplicates, so we will just insert
+                return Ok(self.insert_or_overwrite_file_entry(&new_entry));
+            },
+            Some(x) => x,
+        };
+
+        // from now on, we don't need to hash anything (so we can always short-circuit when we insert
         for &idx in potential_dupes {
-            let existing_entry = &self.entries[idx];
-            match self.compare_files(fs, existing_entry, &new_entry, true)? {
-                (false, _) => {
-                    continue;
-                }
-                (true, Some((existing_hash, new_hash))) => {
-                    // match found!
-                    new_entry.fast_hash = Some(new_hash);
-                    // need to actually make the hard links and deduplicate this file
-                    // TODO implement deduplication
-                    unimplemented!()
-                }
-                _ => { unreachable!() }
+            // must clone this so we don't borrow self
+            let existing_entry = self.entries[idx].clone();
+            match self.compare_files(fs, &existing_entry, &new_entry, true)? {
+                (false, _) => continue,
+                (true, _) =>
+                    // match found! we can now short-circuit
+                    return Ok(self.hard_link_and_insert(fs, &existing_entry, &new_entry)?),
             }
         }
+
         // if we get this far, then that means we didn't find any matches, and this file is unique
         return Ok(self.insert_or_overwrite_file_entry(&new_entry));
     }
@@ -350,6 +359,7 @@ mod test {
 
     use crate::lib::files_index::FilesIndex;
     use crate::lib::fs::TestFs;
+    use std::collections::HashSet;
 
     #[test]
     pub fn test_construct() {
@@ -434,7 +444,6 @@ mod test {
     }
 
     #[test]
-    #[should_panic] // TODO: implement has-based deduplication
     pub fn test_two_duplicates() {
         let mut test_fs = TestFs::default();
         let base_path = Path::new("/somefolder/");
@@ -461,6 +470,37 @@ mod test {
         assert_eq!(f1.stat_inode, f2.stat_inode);
         assert_eq!(f1.fast_hash, f2.fast_hash);
         assert_eq!(f1.fast_hash, f3.fast_hash);
+    }
+
+    #[test]
+    pub fn test_stress_test() {
+        let mut test_fs = TestFs::default();
+        let base_path = Path::new("/largefolder/");
+        test_fs.set_cwd(base_path);
+
+        let mut index = FilesIndex::new(base_path);
+
+        let mut file_content = HashSet::new();
+
+        for i in 1..200 {
+            let content = format!("file_{}", (i % 42)).repeat(i % 3);
+            file_content.insert(content.clone());
+            let f1 = test_fs.new_file_entry(format!("/largefolder/file_{}", i).as_str(),
+                                            &content,
+                );
+            index.add_file(&test_fs, f1.relative_path.as_path()).unwrap();
+        }
+        index.sanity_check();
+        assert_eq!(file_content.len(), index.by_inode.len());
+        assert!(index.by_inode.len() < 199);
+        assert!(index.by_size.len() < 199);
+        assert!(index.by_hash.len() < 199);
+        assert!(index.inode_by_size.len() < 199);
+        assert!(index.inode_by_hash.len() < 199);
+        assert_eq!(index.by_relative_path.len(), 199);
+        assert_eq!(index.by_inode.len(), 29);
+        // TODO: find examples of hash collisions and test that
+        assert_eq!(index.by_hash.len(), 29);
     }
 }
 
