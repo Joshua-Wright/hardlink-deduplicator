@@ -12,14 +12,6 @@ use std::hash::{Hash, Hasher};
 use fasthash::{murmur3, HasherExt};
 
 
-// TODO delete this
-// #[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
-// enum FileEntryKey {
-//     SizeOnly { size: u64 },
-//     FullKey { size: u64, fast_hash: u128, unique_id: u64 },
-// }
-
-
 fn group_by_with_value_func<C, KF, VF, K, V>(entries: C, key_func: KF, value_func: VF) -> HashMap<K, HashSet<V>>
     where C: IntoIterator, KF: Fn(&C::Item) -> K, VF: Fn(usize, &C::Item) -> V, K: Hash + Eq, V: Hash + Eq
 {
@@ -148,6 +140,22 @@ impl FilesIndex {
                 .collect();
             assert_eq!(hashes.len(), 1);
         }
+
+        // check that things are hashed when they should be
+        self.by_size.iter()
+            .filter(|(_, idxs)| idxs.len() > 1)
+            .flat_map(|(_, idxs)|
+                idxs
+                    .iter()
+                    .map(move |&idx| &self.entries[idx])
+            )
+            .for_each(|entry| {
+                assert!(&entry.fast_hash.is_some(),
+                        "file relative_path={:?} is missing hash (size {} is non-unique)",
+                        entry.relative_path.to_string_lossy(),
+                        entry.stat_size,
+                );
+            });
     }
 
 
@@ -159,8 +167,16 @@ impl FilesIndex {
     pub fn insert_or_overwrite_file_entry(&mut self, file_entry: &FileEntry) -> &FileEntry {
         let idx = if let Some(&idx) = self.by_relative_path.get(&file_entry.relative_path) {
             // existing index, remove existing stuff
-            self.by_size.get_mut(&self.entries[idx].stat_size).map(|s| s.remove(&idx));
-            self.by_inode.get_mut(&self.entries[idx].stat_size).map(|s| s.remove(&idx));
+            let existing_entry = &self.entries[idx];
+            self.by_size.get_mut(&existing_entry.stat_size).unwrap().remove(&idx);
+            self.by_inode.get_mut(&existing_entry.stat_inode).unwrap().remove(&idx);
+            self.inode_by_size.get_mut(&existing_entry.stat_size).unwrap().remove(&existing_entry.stat_inode);
+            if let Some(hash) = existing_entry.fast_hash {
+                self.by_hash.get_mut(&hash).unwrap().remove(&idx);
+                self.inode_by_hash.get_mut(&hash).unwrap().remove(&existing_entry.stat_inode);
+            }
+            // and re-insert, because the entry has probably changed
+            self.entries[idx] = file_entry.clone();
             idx
         } else {
             // new index
@@ -201,8 +217,35 @@ impl FilesIndex {
     //     None
     // }
 
+    fn hard_link_and_insert<Fs: AbstractFs>(&mut self, fs: &Fs,
+                                            existing_entry: &FileEntry,
+                                            new_entry: &FileEntry,
+    ) -> Result<&FileEntry> {
+        // TODO: implement dry-run mode
+        assert_eq!(new_entry.stat_size, existing_entry.stat_size);
+        assert_eq!(new_entry.fast_hash, existing_entry.fast_hash);
+        assert_ne!(new_entry.stat_inode, existing_entry.stat_inode);
+
+        let mut backup_filename = new_entry.relative_path.file_name().unwrap().to_owned();
+        backup_filename.push(".backup");
+        let backup_abs_path = self.base_path.join(new_entry.relative_path.with_file_name(backup_filename));
+        fs.rename(new_entry.absolute_path(&self.base_path), &backup_abs_path)?;
+        fs.hard_link(existing_entry.absolute_path(&self.base_path), new_entry.absolute_path(&self.base_path))?;
+
+        let mut checked_new_entry = FileEntry::new(fs, &self.base_path, &new_entry.relative_path)?;
+        checked_new_entry.fast_hash = new_entry.fast_hash;
+        assert_eq!(
+            (checked_new_entry.fast_hash, checked_new_entry.stat_size, checked_new_entry.stat_inode),
+            (existing_entry.fast_hash, existing_entry.stat_size, existing_entry.stat_inode),
+            "fatal error linking {} to {}",
+            existing_entry.relative_path.to_string_lossy(), new_entry.relative_path.to_string_lossy());
+
+        fs.remove_file(&backup_abs_path)?;
+        Ok(self.insert_or_overwrite_file_entry(&checked_new_entry))
+    }
+
     pub fn add_file<Fs: AbstractFs, P: AsRef<Path>>(&mut self, fs: &Fs, relative_path: P) -> Result<&FileEntry> {
-        let new_entry = FileEntry::new(fs, &self.base_path, relative_path)?;
+        let mut new_entry = FileEntry::new(fs, &self.base_path, relative_path)?;
 
         if self.by_inode.contains_key(&new_entry.stat_inode) {
             // this file is already deduplicated into this index
@@ -217,23 +260,42 @@ impl FilesIndex {
         // safe to unwrap because we checked the key is there above
         let potential_dupes = self.by_size.get(&new_entry.stat_size).unwrap();
 
+        if potential_dupes.len() == 1 {
+            let &existing_entry_idx = potential_dupes.iter().next().unwrap();
+            let existing_entry = self.entries[existing_entry_idx].clone();
+            match self.compare_files(fs, &existing_entry, &new_entry, false)? {
+                (equal, Some((existing_entry_hash, new_entry_hash))) => {
+                    let updated_existing_entry = FileEntry {
+                        fast_hash: Some(existing_entry_hash),
+                        ..existing_entry
+                    };
+                    self.insert_or_overwrite_file_entry(&updated_existing_entry);
+                    new_entry.fast_hash = Some(new_entry_hash);
+                    if equal {
+                        // they are equal, so this is a duplicate file
+                        return Ok(self.hard_link_and_insert(fs, &updated_existing_entry, &new_entry)?);
+                    } else {
+                        // it's a non-duplicate, so just insert it
+                        return Ok(self.insert_or_overwrite_file_entry(&new_entry));
+                    }
+                }
+                // we told self.compare_files() not to short-circuit, so it better not have short-circuited
+                (_, None) => { unreachable!(); }
+            }
+        }
+
         for &idx in potential_dupes {
             let existing_entry = &self.entries[idx];
-            match self.compare_files(fs, existing_entry, &new_entry)? {
+            match self.compare_files(fs, existing_entry, &new_entry, true)? {
                 (false, _) => {
                     continue;
                 }
-                (true, Some((e1, e2))) => {
+                (true, Some((existing_hash, new_hash))) => {
                     // match found!
-                    if e1.stat_inode == e2.stat_inode {
-                        // happy case, the files are already deduplicated
-                        self.insert_or_overwrite_file_entry(&e1);
-                        return Ok(self.insert_or_overwrite_file_entry(&e2));
-                    } else {
-                        // need to actually make the hard links and deduplicate this file
-                        // TODO implement deduplication
-                        unimplemented!()
-                    }
+                    new_entry.fast_hash = Some(new_hash);
+                    // need to actually make the hard links and deduplicate this file
+                    // TODO implement deduplication
+                    unimplemented!()
                 }
                 _ => { unreachable!() }
             }
@@ -243,7 +305,7 @@ impl FilesIndex {
     }
 
 
-    fn compare_files<Fs: AbstractFs>(&self, fs: &Fs, entry1: &FileEntry, entry2: &FileEntry) -> Result<(bool, Option<(FileEntry, FileEntry)>)> {
+    fn compare_files<Fs: AbstractFs>(&self, fs: &Fs, entry1: &FileEntry, entry2: &FileEntry, short_circuit: bool) -> Result<(bool, Option<(u128, u128)>)> {
         const BUFSIZE: usize = 4096;
         let file1 = fs.open(&entry1.absolute_path(&self.base_path))?;
         let file2 = fs.open(&entry2.absolute_path(&self.base_path))?;
@@ -253,13 +315,17 @@ impl FilesIndex {
         let mut hasher1: murmur3::Hasher128_x64 = Default::default();
         let mut hasher2: murmur3::Hasher128_x64 = Default::default();
 
+        let mut equal = true;
         loop {
             let (len1, len2) = match (reader1.fill_buf(), reader2.fill_buf()) {
                 (Ok(buf1), Ok(buf2)) => {
                     if buf1 != buf2 {
-                        return Ok((false, None));
+                        equal = false;
+                        if short_circuit {
+                            return Ok((false, None));
+                        }
                     }
-                    if buf1.len() == 0 {
+                    if buf1.is_empty() {
                         break;
                     }
                     hasher1.write(buf1);
@@ -273,19 +339,7 @@ impl FilesIndex {
             reader2.consume(len2);
         }
 
-        Ok((
-            true,
-            (
-                FileEntry {
-                    fast_hash: hasher1.finish_ext().into(),
-                    ..entry1.to_owned()
-                },
-                FileEntry {
-                    fast_hash: hasher2.finish_ext().into(),
-                    ..entry2.to_owned()
-                }
-            ).into()
-        ))
+        Ok((equal, (hasher1.finish_ext().into(), hasher2.finish_ext().into()).into()))
     }
 }
 
@@ -306,14 +360,14 @@ mod test {
 
         let file_entries = vec![
             test_fs.new_file_entry("/somefolder/asdf", "test"),
-            test_fs.new_file_entry("/somefolder/asdf2", "asdf"),
-            test_fs.new_file_entry("/somefolder/newfile", "newf"),
+            test_fs.new_file_entry("/somefolder/asdf2", "asdf1"),
+            test_fs.new_file_entry("/somefolder/newfile", "newfile"),
         ];
 
         let index = FilesIndex::from_entries("/somefolder/", &file_entries);
         assert_eq!(index.entries.len(), 3);
         assert_eq!(index.by_relative_path.len(), 3);
-        assert_eq!(index.by_size.len(), 1);
+        assert_eq!(index.by_size.len(), 3);
 
         assert_eq!(index.get_by_relative_path(&"asdf").unwrap(), &file_entries[0]);
         assert_eq!(index.get_by_relative_path(&"asdf2").unwrap(), &file_entries[1]);
@@ -358,8 +412,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic] // TODO: implement deduplication
-    pub fn test_add_duplicate_file() {
+    pub fn test_one_duplicate() {
         let mut test_fs = TestFs::default();
         let base_path = Path::new("/somefolder/");
         test_fs.set_cwd(base_path);
@@ -368,8 +421,46 @@ mod test {
 
         let f1 = test_fs.new_file_entry("/somefolder/test1", "asdf");
         let f2 = test_fs.new_file_entry("/somefolder/test2", "asdf");
+        assert_ne!(f1.stat_inode, f2.stat_inode);
         index.add_file(&test_fs, f1.relative_path.as_path()).unwrap();
         index.add_file(&test_fs, f2.relative_path.as_path()).unwrap();
+        let f1 = index.get_by_relative_path(&f1.relative_path).unwrap();
+        let f2 = index.get_by_relative_path(&f2.relative_path).unwrap();
+        index.sanity_check();
+        assert!(f1.fast_hash.is_some());
+        assert!(f2.fast_hash.is_some());
+        assert_eq!(f1.stat_inode, f2.stat_inode);
+        assert_eq!(f1.fast_hash, f2.fast_hash);
+    }
+
+    #[test]
+    #[should_panic] // TODO: implement has-based deduplication
+    pub fn test_two_duplicates() {
+        let mut test_fs = TestFs::default();
+        let base_path = Path::new("/somefolder/");
+        test_fs.set_cwd(base_path);
+
+        let mut index = FilesIndex::new(base_path);
+
+        let f1 = test_fs.new_file_entry("/somefolder/test1", "asdf");
+        let f2 = test_fs.new_file_entry("/somefolder/test2", "asdf");
+        let f3 = test_fs.new_file_entry("/somefolder/test3", "asdf");
+        assert_ne!(f1.stat_inode, f2.stat_inode);
+        assert_ne!(f1.stat_inode, f3.stat_inode);
+        assert_ne!(f2.stat_inode, f3.stat_inode);
+        index.add_file(&test_fs, f1.relative_path.as_path()).unwrap();
+        index.add_file(&test_fs, f2.relative_path.as_path()).unwrap();
+        index.add_file(&test_fs, f3.relative_path.as_path()).unwrap();
+        let f1 = index.get_by_relative_path(&f1.relative_path).unwrap();
+        let f2 = index.get_by_relative_path(&f2.relative_path).unwrap();
+        let f3 = index.get_by_relative_path(&f3.relative_path).unwrap();
+        index.sanity_check();
+        assert!(f1.fast_hash.is_some());
+        assert!(f2.fast_hash.is_some());
+        assert!(f3.fast_hash.is_some());
+        assert_eq!(f1.stat_inode, f2.stat_inode);
+        assert_eq!(f1.fast_hash, f2.fast_hash);
+        assert_eq!(f1.fast_hash, f3.fast_hash);
     }
 }
 

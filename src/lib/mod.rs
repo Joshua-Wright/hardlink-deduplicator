@@ -6,34 +6,44 @@ pub mod file_entry;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+// use std::backtrace::Backtrace;
+extern crate backtrace;
+use backtrace::Backtrace;
+
+
 #[derive(Debug)]
 pub enum Error {
-    Generic(String),
-    IO(std::io::Error),
-    StripPrefixError(std::path::StripPrefixError),
+    Generic(Backtrace, String),
+    IO(Backtrace, std::io::Error),
+    StripPrefixError(Backtrace, std::path::StripPrefixError),
 }
+
+// impl Error {
+//     pub fn generic()
+// }
 
 impl From<String> for Error {
     fn from(s: String) -> Self {
-        Error::Generic(s)
+        Error::Generic(Backtrace::new(), s)
     }
 }
 
 impl From<&str> for Error {
     fn from(s: &str) -> Self {
-        Error::Generic(s.to_owned())
+        Error::Generic(Backtrace::new(), s.to_owned())
     }
 }
 
 
 impl From<std::path::StripPrefixError> for Error {
     fn from(e: std::path::StripPrefixError) -> Self {
-        Error::StripPrefixError(e)
+        Error::StripPrefixError(Backtrace::new(), e)
     }
 }
 
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
-        Error::IO(e)
+        // std::backtrace::Backtrace::capture();
+        Error::IO(Backtrace::new(), e)
     }
 }

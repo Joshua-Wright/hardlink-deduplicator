@@ -189,8 +189,8 @@ impl AbstractFs for TestFs {
     fn metadata<P: AsRef<Path>>(&self, path: P) -> Result<(u64, SystemTime, SystemTime, SystemTime, u64)> {
         let path_str = path.as_ref().to_string_lossy();
         let buf = self.filedata().get(path_str.as_ref())
-            .ok_or(Error::Generic(format!("file {:?} not found", path_str)))?;
-        let inode = self.inodes().get(path_str.as_ref()).ok_or(Error::Generic(format!("file {:?} not found", path_str)))?;
+            .ok_or(Error::from(format!("file {:?} not found", path_str)))?;
+        let inode = self.inodes().get(path_str.as_ref()).ok_or(Error::from(format!("file {:?} not found", path_str)))?;
         Ok((
             buf.len() as u64,
             // TODO: fix that
@@ -205,26 +205,35 @@ impl AbstractFs for TestFs {
         if let Some(_) = self.filedata().get(&path_str(&dst)) {
             return Err("dst file exists!".into());
         }
-        let file_content = self.filedata().get(&path_str(&src)).ok_or(Error::Generic("file not found".to_owned()))?;
-        let inode = self.inodes().get(&path_str(&src)).ok_or(Error::Generic("file not found".to_owned()))?;
+        let file_content = self.filedata().get(&path_str(&src)).ok_or(Error::from("file not found".to_owned()))?;
+        let inode = self.inodes().get(&path_str(&src)).ok_or(Error::from("file not found".to_owned()))?;
         self.filedata_mut().insert(path_str(&dst), file_content.clone());
         self.inodes_mut().insert(path_str(&dst), inode.clone());
         Ok(())
     }
 
     fn remove_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        self.inodes_mut().remove(&path_str(&path)).ok_or(Error::Generic("file not found".into()))?;
-        self.filedata_mut().remove(&path_str(&path)).ok_or(Error::Generic("file_not_found".into()))?;
+        self.inodes_mut().remove(&path_str(&path)).ok_or(Error::from("file not found"))?;
+        self.filedata_mut().remove(&path_str(&path)).ok_or(Error::from("file_not_found"))?;
         Ok(())
     }
 
     fn rename<P: AsRef<Path>, Q: AsRef<Path>>(&self, from: P, to: Q) -> Result<()> {
-        let file_content = self.filedata().get(&path_str(&from)).ok_or(Error::Generic("file not found".to_owned()))?;
-        let inode = self.inodes().get(&path_str(&from)).ok_or(Error::Generic("file not found".to_owned()))?;
+        // get the file that we're going to move
+        let file_content = self.filedata().get(&path_str(&from)).ok_or(Error::from("file not found".to_owned()))?;
+        let inode = self.inodes().get(&path_str(&from)).ok_or(Error::from("file not found".to_owned()))?;
+
+        // if an existing file exists, overwrite it
         if let Some(_) = self.filedata().get(&path_str(&to)) {
-            self.inodes_mut().remove(&path_str(&to)).ok_or(Error::Generic("file not found".into()))?;
-            self.filedata_mut().remove(&path_str(&to)).ok_or(Error::Generic("file_not_found".into()))?;
+            self.inodes_mut().remove(&path_str(&to)).ok_or(Error::from("file not found"))?;
+            self.filedata_mut().remove(&path_str(&to)).ok_or(Error::from("file_not_found"))?;
         }
+
+        // remove the old file
+        self.inodes_mut().remove(&path_str(&from)).ok_or(Error::from("file not found"))?;
+        self.filedata_mut().remove(&path_str(&from)).ok_or(Error::from("file_not_found"))?;
+
+        // insert the new file
         self.filedata_mut().insert(path_str(&to), file_content.clone());
         self.inodes_mut().insert(path_str(&to), inode.clone());
         Ok(())

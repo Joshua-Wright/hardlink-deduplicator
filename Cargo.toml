@@ -10,6 +10,7 @@ edition = "2018"
 walkdir = "2"
 fasthash = { git = "https://github.com/Joshua-Wright/rust-fasthash/", rev = "bd0ef9b9391ca80d1a115c3207e1f8417bb4c6b9"}
 cfg-if = "0.1.10"
+backtrace = "0.3.50"
 
 #[dev-dependencies]
 [dependencies.mockall]
