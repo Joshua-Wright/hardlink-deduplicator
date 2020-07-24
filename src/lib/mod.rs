@@ -16,11 +16,8 @@ pub enum Error {
     Generic(Backtrace, String),
     IO(Backtrace, std::io::Error),
     StripPrefixError(Backtrace, std::path::StripPrefixError),
+    ReadOnlyFs(),
 }
-
-// impl Error {
-//     pub fn generic()
-// }
 
 impl From<String> for Error {
     fn from(s: String) -> Self {

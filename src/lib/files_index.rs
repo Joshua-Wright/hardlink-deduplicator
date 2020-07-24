@@ -35,7 +35,7 @@ fn group_by<C: IntoIterator, KF, K: Hash + Eq>(entries: C, f: KF) -> HashMap<K, 
 // have the same inode
 #[derive(Debug, Clone)]
 pub struct FilesIndex {
-    base_path: PathBuf,
+    pub base_path: PathBuf,
     entries: Vec<FileEntry>,
     by_relative_path: HashMap<PathBuf, usize>,
     by_size: HashMap<u64, HashSet<usize>>,
@@ -46,7 +46,7 @@ pub struct FilesIndex {
 }
 
 impl FilesIndex {
-    fn new<P: AsRef<Path>>(base_path: P) -> Self {
+    pub fn new<P: AsRef<Path>>(base_path: P) -> Self {
         // TODO: look for index file and read it, I guess
         Self {
             base_path: base_path.as_ref().to_path_buf(),
@@ -232,6 +232,7 @@ impl FilesIndex {
         let backup_abs_path = self.base_path.join(new_entry.relative_path.with_file_name(backup_filename));
         fs.rename(new_entry.absolute_path(&self.base_path), &backup_abs_path)?;
         fs.hard_link(existing_entry.absolute_path(&self.base_path), new_entry.absolute_path(&self.base_path))?;
+        // TODO: rename the file back, if hard link fails
 
         let mut checked_new_entry = FileEntry::new(fs, &self.base_path, &new_entry.relative_path)?;
         checked_new_entry.fast_hash = new_entry.fast_hash;
@@ -245,8 +246,8 @@ impl FilesIndex {
         Ok(self.insert_or_overwrite_file_entry(&checked_new_entry))
     }
 
-    pub fn add_file<Fs: AbstractFs, P: AsRef<Path>>(&mut self, fs: &Fs, relative_path: P) -> Result<&FileEntry> {
-        let mut new_entry = FileEntry::new(fs, &self.base_path, relative_path)?;
+    pub fn add_file<Fs: AbstractFs, P: AsRef<Path>>(&mut self, fs: &Fs, path: P) -> Result<&FileEntry> {
+        let mut new_entry = FileEntry::new(fs, &self.base_path, path)?;
 
         if self.by_inode.contains_key(&new_entry.stat_inode) {
             // this file is already deduplicated into this index

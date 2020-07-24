@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use super::Result;
+use super::Error;
 
 pub trait AbstractFs {
     type File: std::io::Read;
@@ -27,33 +28,20 @@ cfg_if::cfg_if! {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-cfg_if::cfg_if! {
-    if #[cfg(test)] {
-        use std::cell::UnsafeCell;
-        use std::ops::Deref;
-        use std::collections::HashMap;
-        use super::Error;
-    }
-}
+
 
 
 #[derive(Debug, Default)]
 pub struct RealFs {}
-
 impl RealFs {}
-
-
 impl AbstractFs for RealFs {
     type File = std::fs::File;
-
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
         Self::File::open(path).map_err(Into::into)
     }
-
     fn canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf> {
         std::fs::canonicalize(path).map_err(Into::into)
     }
-
     fn metadata<P: AsRef<Path>>(&self, path: P) -> Result<(u64, SystemTime, SystemTime, SystemTime, u64)> {
         let m = std::fs::metadata(path)?;
         if !m.is_file() {
@@ -62,7 +50,6 @@ impl AbstractFs for RealFs {
         use std::os::linux::fs::MetadataExt;
         Ok((m.len(), m.modified()?, m.accessed()?, m.created()?, m.st_ino()))
     }
-
     fn hard_link<P: AsRef<Path>, Q: AsRef<Path>>(&self, src: P, dst: Q) -> Result<()> {
         std::fs::hard_link(src, dst).map_err(Into::into)
     }
@@ -73,7 +60,49 @@ impl AbstractFs for RealFs {
         std::fs::rename(from, to).map_err(Into::into)
     }
 }
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
+#[derive(Debug, Default)]
+pub struct ReadOnlyFs {}
+impl ReadOnlyFs {}
+impl AbstractFs for ReadOnlyFs {
+    type File = std::fs::File;
+    fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
+        Self::File::open(path).map_err(Into::into)
+    }
+    fn canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf> {
+        std::fs::canonicalize(path).map_err(Into::into)
+    }
+    fn metadata<P: AsRef<Path>>(&self, path: P) -> Result<(u64, SystemTime, SystemTime, SystemTime, u64)> {
+        let m = std::fs::metadata(path)?;
+        if !m.is_file() {
+            return Err("path is not a file".into());
+        }
+        use std::os::linux::fs::MetadataExt;
+        Ok((m.len(), m.modified()?, m.accessed()?, m.created()?, m.st_ino()))
+    }
+    fn hard_link<P: AsRef<Path>, Q: AsRef<Path>>(&self, _src: P, _dst: Q) -> Result<()> {
+        Err(Error::ReadOnlyFs())
+    }
+    fn remove_file<P: AsRef<Path>>(&self, _path: P) -> Result<()> {
+        Err(Error::ReadOnlyFs())
+    }
+    fn rename<P: AsRef<Path>, Q: AsRef<Path>>(&self, _from: P, _to: Q) -> Result<()> {
+        Err(Error::ReadOnlyFs())
+    }
+}
+
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+cfg_if::cfg_if! {
+    if #[cfg(test)] {
+        use std::cell::UnsafeCell;
+        use std::ops::Deref;
+        use std::collections::HashMap;
+    }
+}
 
 #[cfg(test)]
 #[derive(Debug, Default)]
