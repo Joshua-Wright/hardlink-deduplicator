@@ -14,19 +14,21 @@ use crate::lib::fast_hash::hash_file;
 
 
 fn group_by_with_value_func<C, KF, VF, K, V>(entries: C, key_func: KF, value_func: VF) -> HashMap<K, HashSet<V>>
-    where C: IntoIterator, KF: Fn(&C::Item) -> K, VF: Fn(usize, &C::Item) -> V, K: Hash + Eq, V: Hash + Eq
+    where C: IntoIterator, KF: Fn(&C::Item) -> Option<K>, VF: Fn(usize, &C::Item) -> V, K: Hash + Eq, V: Hash + Eq
 {
     let mut out: HashMap<K, HashSet<V>, RandomState> = HashMap::new();
     for (i, e) in entries.into_iter().enumerate() {
-        out.entry(key_func(&e))
+        if let Some(key) = key_func(&e) {
+        out.entry(key)
             .or_default()
             .insert(value_func(i, &e));
+        }
     }
     out
 }
 
 fn group_by<C: IntoIterator, KF, K: Hash + Eq>(entries: C, f: KF) -> HashMap<K, HashSet<usize>>
-    where KF: Fn(&C::Item) -> K {
+    where KF: Fn(&C::Item) -> Option<K> {
     group_by_with_value_func(entries, f, |i, _| i)
 }
 
@@ -46,8 +48,7 @@ pub struct FilesIndex {
 }
 
 impl FilesIndex {
-    pub fn new<P: AsRef<Path>>(base_path: P) -> Self {
-        // TODO: look for index file and read it, I guess
+    fn new<P: AsRef<Path>>(base_path: P) -> Self {
         Self {
             base_path: base_path.as_ref().to_path_buf(),
             entries: Default::default(),
@@ -73,20 +74,17 @@ impl FilesIndex {
         Self {
             base_path: base_path.as_ref().to_path_buf(),
             by_relative_path: by_path,
-            by_size: group_by(&entries, |e| e.stat_size),
-            by_inode: group_by(&entries, |e| e.stat_inode),
-            by_hash: group_by(
-                entries.iter().filter(|e| e.fast_hash.is_some()),
-                |e| e.fast_hash.unwrap(),
-            ),
+            by_size: group_by(&entries, |e| Some(e.stat_size)),
+            by_inode: group_by(&entries, |e| Some(e.stat_inode)),
+            by_hash: group_by(&entries, |e| e.fast_hash),
             inode_by_size: group_by_with_value_func(
                 &entries,
-                |e| e.stat_size,
+                |e| Some(e.stat_size),
                 |_, e| e.stat_inode,
             ),
             inode_by_hash: group_by_with_value_func(
-                entries.iter().filter(|e| e.fast_hash.is_some()),
-                |e| e.fast_hash.unwrap(),
+                &entries,
+                |e| e.fast_hash,
                 |_, e| e.stat_inode,
             ),
             entries,
@@ -97,7 +95,12 @@ impl FilesIndex {
         let mut index_path = base_path.as_ref().to_owned();
         index_path.push(".index_file.csv");
 
-        let file = fs.open(index_path)?;
+        // if we can't read the index file, just make a new empty index
+        if fs.metadata(&index_path).is_err() {
+            return Ok(Self::new(base_path));
+        }
+
+        let file = fs.open(&index_path)?;
         let mut rdr = csv::Reader::from_reader(file);
 
         let entries: Vec<FileEntry> = rdr.deserialize()
@@ -106,18 +109,21 @@ impl FilesIndex {
         Ok(Self::from_entries(fs, base_path, &entries))
     }
 
+    pub fn save_to_writer<W: std::io::Write>(&self, writer: &mut W) -> Result<()> {
+        let mut wtr = csv::Writer::from_writer(writer);
+        for entry in &self.entries {
+            wtr.serialize(entry)?;
+        }
+        Ok(())
+    }
+
     pub fn save<Fs: AbstractFs>(&self, fs: &mut Fs) -> Result<()> {
         let mut index_path = self.base_path.clone();
         index_path.push(".index_file.csv");
 
-        // let file = fs.open_writable(index_path)?;
         let mut buf = vec![];
-        {
-            let mut wtr = csv::Writer::from_writer(&mut buf);
-            for entry in &self.entries {
-                wtr.serialize(entry)?;
-            }
-        }
+        self.save_to_writer(&mut buf)?;
+
         fs.write_to_file(index_path, &buf)?;
         Ok(())
     }
@@ -130,7 +136,8 @@ impl FilesIndex {
             assert!(self.by_inode.get(&entry.stat_inode).unwrap().contains(&i));
             assert!(self.inode_by_size.get(&entry.stat_size).unwrap().contains(&entry.stat_inode));
             if let Some(hash) = entry.fast_hash {
-                assert!(self.by_hash.get(&hash).unwrap().contains(&i));
+                assert!(self.by_hash.contains_key(&hash), "{:?} missing completely from hash index", entry);
+                assert!(self.by_hash.get(&hash).unwrap().contains(&i), "{:?} missing from hash index", entry);
                 assert!(self.inode_by_hash.get(&hash).unwrap().contains(&entry.stat_inode));
             }
         }
@@ -192,7 +199,6 @@ impl FilesIndex {
             });
     }
 
-
     pub fn get_by_relative_path<P: AsRef<Path>>(&self, relative_path: &P) -> Option<&FileEntry> {
         self.by_relative_path.get(relative_path.as_ref())
             .map(|&i| { &self.entries[i] })
@@ -237,7 +243,6 @@ impl FilesIndex {
                                             existing_entry: &FileEntry,
                                             new_entry: &FileEntry,
     ) -> Result<&FileEntry> {
-        // TODO: implement dry-run mode
         assert_eq!(new_entry.stat_size, existing_entry.stat_size);
         assert_eq!(new_entry.fast_hash, existing_entry.fast_hash);
         assert_ne!(new_entry.stat_inode, existing_entry.stat_inode, "error: tried to link files that are the same");
@@ -245,12 +250,12 @@ impl FilesIndex {
 
         let mut backup_filename = new_entry.relative_path.file_name().unwrap().to_owned();
         backup_filename.push(".backup");
-        let backup_abs_path = self.base_path.join(new_entry.relative_path.with_file_name(backup_filename));
+        let backup_abs_path = new_entry.absolute_path(&self.base_path).with_file_name(backup_filename);
         fs.rename(new_entry.absolute_path(&self.base_path), &backup_abs_path)?;
         fs.hard_link(existing_entry.absolute_path(&self.base_path), new_entry.absolute_path(&self.base_path))?;
         // TODO: rename the file back, if hard link fails
 
-        let mut checked_new_entry = FileEntry::new(fs, &self.base_path, &new_entry.relative_path)?;
+        let mut checked_new_entry = FileEntry::new(fs, &self.base_path, &new_entry.absolute_path(&self.base_path))?;
         checked_new_entry.fast_hash = new_entry.fast_hash;
         assert_eq!(
             (checked_new_entry.fast_hash, checked_new_entry.stat_size, checked_new_entry.stat_inode),
@@ -266,6 +271,7 @@ impl FilesIndex {
         let mut new_entry = FileEntry::new(fs, &self.base_path, path)?;
         if let Some(existing_entry) = self.get_by_relative_path(&new_entry.relative_path) {
             assert!(new_entry.eq_except_hash(existing_entry));
+            return Ok(self.get_by_relative_path(&new_entry.relative_path).unwrap());
         }
 
         if self.by_inode.contains_key(&new_entry.stat_inode) {
@@ -298,7 +304,7 @@ impl FilesIndex {
                     } else {
                         // it's a non-duplicate, so just insert it
                         Ok(self.update_file_entry(&new_entry))
-                    }
+                    };
                 }
                 // we told self.compare_files() not to short-circuit, so it better not have short-circuited
                 (_, None) => { unreachable!(); }
@@ -332,7 +338,6 @@ impl FilesIndex {
         // if we get this far, then that means we didn't find any matches, and this file is unique
         Ok(self.update_file_entry(&new_entry))
     }
-
 
     fn compare_files<Fs: AbstractFs>(&self, fs: &Fs, entry1: &FileEntry, entry2: &FileEntry, short_circuit: bool) -> Result<(bool, Option<(u128, u128)>)> {
         const BUFSIZE: usize = 4096;
@@ -394,7 +399,7 @@ mod test {
             test_fs.new_file_entry("/somefolder/newfile", "newfile"),
         ];
 
-        let index = FilesIndex::from_entries(&test_fs,"/somefolder/", &file_entries);
+        let index = FilesIndex::from_entries(&test_fs, "/somefolder/", &file_entries);
         assert_eq!(index.entries.len(), 3);
         assert_eq!(index.by_relative_path.len(), 3);
         assert_eq!(index.by_size.len(), 3);
@@ -511,12 +516,11 @@ mod test {
         index.save(&mut test_fs).unwrap();
         let s = test_fs.get_file_data("/somefolder/.index_file.csv").unwrap();
         let s = std::str::from_utf8(s).unwrap();
-        assert_eq!(s, "relative_path,fast_hash,stat_size,stat_modified,stat_accessed,stat_created,stat_inode
-test1,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,2
-test2,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,2
-test3,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,2
+        assert_eq!(s, "relative_path,fast_hash,stat_size,stat_modified,stat_created,stat_inode
+test1,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,2
+test2,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,2
+test3,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,2
 ");
-
         let index = FilesIndex::for_base_path(&test_fs, base_path).unwrap();
         index.sanity_check();
         let f1 = index.get_by_relative_path(&f1.relative_path).unwrap().clone();
@@ -543,7 +547,7 @@ test3,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T
         assert_eq!(f2.stat_inode, 3);
         assert_eq!(f3.stat_inode, 4);
         test_fs.add_text_file("/somefolder/.index_file.csv",
-                                               "relative_path,fast_hash,stat_size,stat_modified,stat_accessed,stat_created,stat_inode
+                              "relative_path,fast_hash,stat_size,stat_modified,stat_accessed,stat_created,stat_inode
 test1,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,2
 test2,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,2
 test3,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,2

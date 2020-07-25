@@ -16,8 +16,6 @@ pub struct FileEntry {
     #[serde(with = "humantime_serde")]
     pub stat_modified: SystemTime,
     #[serde(with = "humantime_serde")]
-    pub stat_accessed: SystemTime,
-    #[serde(with = "humantime_serde")]
     pub stat_created: SystemTime,
     // in the case of non-duplicate files with the same size and hash, the inode resolves the duplicates
     pub stat_inode: u64,
@@ -38,7 +36,6 @@ impl FileEntry {
             fast_hash: None,
             stat_size: size,
             stat_modified: modified,
-            stat_accessed: accessed,
             stat_created: created,
             stat_inode: inode,
         })
@@ -70,14 +67,12 @@ impl FileEntry {
             &self.relative_path,
             &self.stat_size,
             &self.stat_modified,
-            &self.stat_accessed,
             &self.stat_created,
             &self.stat_inode
         ) == (
             &other.relative_path,
             &other.stat_size,
             &other.stat_modified,
-            &other.stat_accessed,
             &other.stat_created,
             &other.stat_inode
         )

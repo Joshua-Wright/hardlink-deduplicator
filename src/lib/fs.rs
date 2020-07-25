@@ -213,7 +213,7 @@ impl AbstractFs for TestFs {
     }
 
     fn write_to_file<P: AsRef<Path>>(&mut self, path: P, buf: &[u8]) -> Result<()> {
-        self.filedata_.insert(path_str(&path), buf.to_vec());
+        self.add_binary_file(&path_str(&path), buf);
         Ok(())
     }
 
@@ -232,6 +232,7 @@ impl AbstractFs for TestFs {
     // size, modified, accessed, created, inode
     fn metadata<P: AsRef<Path>>(&self, path: P) -> Result<(u64, SystemTime, SystemTime, SystemTime, u64)> {
         let path_str = path.as_ref().to_string_lossy();
+        println!("metadata({:?})", path_str);
         let buf = self.filedata_.get(path_str.as_ref())
             .ok_or_else(|| Error::from(format!("file {:?} not found", path_str)))?;
         let inode = self.inodes_.get(path_str.as_ref()).ok_or_else(|| Error::from(format!("file {:?} not found", path_str)))?;
