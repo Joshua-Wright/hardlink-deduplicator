@@ -10,23 +10,16 @@ pub trait AbstractFs {
     type File: std::io::Read;
     type WritableFile: std::io::Write;
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File>;
-    fn open_writable<P: AsRef<Path>>(&self, path: P) -> Result<Self::WritableFile>;
+    fn open_writable<P: AsRef<Path>>(&mut self, path: P) -> Result<Self::WritableFile>;
     fn canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf>;
     // size, modified, accessed, created, inode
     fn metadata<P: AsRef<Path>>(&self, path: P) -> Result<(u64, SystemTime, SystemTime, SystemTime, u64)>;
 
-    fn hard_link<P: AsRef<Path>, Q: AsRef<Path>>(&self, src: P, dst: Q) -> Result<()>;
-    fn remove_file<P: AsRef<Path>>(&self, path: P) -> Result<()>;
-    fn rename<P: AsRef<Path>, Q: AsRef<Path>>(&self, from: P, to: Q) -> Result<()>;
+    fn hard_link<P: AsRef<Path>, Q: AsRef<Path>>(&mut self, src: P, dst: Q) -> Result<()>;
+    fn remove_file<P: AsRef<Path>>(&mut self, path: P) -> Result<()>;
+    fn rename<P: AsRef<Path>, Q: AsRef<Path>>(&mut self, from: P, to: Q) -> Result<()>;
 }
 
-// cfg_if::cfg_if! {
-//     if #[cfg(not(test))] {
-//         pub use RealFs as Fs;
-//     } else {
-//         pub use TestFs as Fs;
-//     }
-// }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -36,13 +29,13 @@ pub struct RealFs {}
 
 impl RealFs {}
 
-impl AbstractFs for RealFs {
+impl<'a> AbstractFs for RealFs {
     type File = std::fs::File;
     type WritableFile = std::fs::File;
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
         Self::File::open(path).map_err(Into::into)
     }
-    fn open_writable<P: AsRef<Path>>(&self, path: P) -> Result<Self::WritableFile> {
+    fn open_writable<'b, P: AsRef<Path>>(&'b mut self, path: P) -> Result<Self::WritableFile> {
         std::fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -60,13 +53,13 @@ impl AbstractFs for RealFs {
         use std::os::linux::fs::MetadataExt;
         Ok((m.len(), m.modified()?, m.accessed()?, m.created()?, m.st_ino()))
     }
-    fn hard_link<P: AsRef<Path>, Q: AsRef<Path>>(&self, src: P, dst: Q) -> Result<()> {
+    fn hard_link<P: AsRef<Path>, Q: AsRef<Path>>(&mut self, src: P, dst: Q) -> Result<()> {
         std::fs::hard_link(src, dst).map_err(Into::into)
     }
-    fn remove_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+    fn remove_file<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
         std::fs::remove_file(path).map_err(Into::into)
     }
-    fn rename<P: AsRef<Path>, Q: AsRef<Path>>(&self, from: P, to: Q) -> Result<()> {
+    fn rename<P: AsRef<Path>, Q: AsRef<Path>>(&mut self, from: P, to: Q) -> Result<()> {
         std::fs::rename(from, to).map_err(Into::into)
     }
 }
@@ -83,7 +76,7 @@ impl AbstractFs for ReadOnlyFs {
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
         Self::File::open(path).map_err(Into::into)
     }
-    fn open_writable<P: AsRef<Path>>(&self, path: P) -> Result<Self::WritableFile> {
+    fn open_writable<'b, P: AsRef<Path>>(&'b mut self, _path: P) -> Result<Self::WritableFile> {
         Err(Error::ReadOnlyFs())
     }
     fn canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf> {
@@ -97,13 +90,13 @@ impl AbstractFs for ReadOnlyFs {
         use std::os::linux::fs::MetadataExt;
         Ok((m.len(), m.modified()?, m.accessed()?, m.created()?, m.st_ino()))
     }
-    fn hard_link<P: AsRef<Path>, Q: AsRef<Path>>(&self, _src: P, _dst: Q) -> Result<()> {
+    fn hard_link<P: AsRef<Path>, Q: AsRef<Path>>(&mut self, _src: P, _dst: Q) -> Result<()> {
         Err(Error::ReadOnlyFs())
     }
-    fn remove_file<P: AsRef<Path>>(&self, _path: P) -> Result<()> {
+    fn remove_file<P: AsRef<Path>>(&mut self, _path: P) -> Result<()> {
         Err(Error::ReadOnlyFs())
     }
-    fn rename<P: AsRef<Path>, Q: AsRef<Path>>(&self, _from: P, _to: Q) -> Result<()> {
+    fn rename<P: AsRef<Path>, Q: AsRef<Path>>(&mut self, _from: P, _to: Q) -> Result<()> {
         Err(Error::ReadOnlyFs())
     }
 }
@@ -122,8 +115,8 @@ cfg_if::cfg_if! {
 #[cfg(test)]
 #[derive(Debug, Default)]
 pub struct TestFs {
-    filedata_: UnsafeCell<HashMap<String, Vec<u8>>>,
-    inodes_: UnsafeCell<HashMap<String, u64>>,
+    filedata_: HashMap<String, Vec<u8>>,
+    inodes_: HashMap<String, u64>,
     pub cwd: PathBuf,
     // TODO: turn this into a function call log or something like that
     count: UnsafeCell<i64>,
@@ -156,39 +149,14 @@ impl TestFs {
     }
 
     pub fn get_file_data<P: AsRef<Path>>(&self, path: P) -> Result<&[u8]> {
-        match self.filedata().get(&path_str(path)) {
+        match self.filedata_.get(&path_str(path)) {
             None => Err("File not found".into()),
             Some(s) => Ok(s),
         }
     }
 
-    // horrible mutation garbage
-    fn filedata(&self) -> &HashMap<String, Vec<u8>> {
-        unsafe {
-            self.filedata_.get().as_ref().unwrap()
-        }
-    }
-
-    fn inodes(&self) -> &HashMap<String, u64> {
-        unsafe {
-            self.inodes_.get().as_ref().unwrap()
-        }
-    }
-
-    fn filedata_mut(&self) -> &mut HashMap<String, Vec<u8>> {
-        unsafe {
-            self.filedata_.get().as_mut().unwrap()
-        }
-    }
-
-    fn inodes_mut(&self) -> &mut HashMap<String, u64> {
-        unsafe {
-            self.inodes_.get().as_mut().unwrap()
-        }
-    }
-
     fn next_inode(&self) -> u64 {
-        self.inodes().values().max()
+        self.inodes_.values().max()
             .cloned()
             .unwrap_or(1u64) + 1
     }
@@ -198,13 +166,13 @@ impl TestFs {
     }
 
     pub fn add_text_file(&mut self, filename: &str, filedata: &str) {
-        self.filedata_mut().insert(filename.to_owned(), filedata.as_bytes().to_vec());
-        self.inodes_mut().insert(filename.to_owned(), self.next_inode());
+        self.filedata_.insert(filename.to_owned(), filedata.as_bytes().to_vec());
+        self.inodes_.insert(filename.to_owned(), self.next_inode());
     }
 
     pub fn add_binary_file(&mut self, filename: &str, filedata: &[u8]) {
-        self.filedata_mut().insert(filename.to_owned(), filedata.to_vec());
-        self.inodes_mut().insert(filename.to_owned(), self.next_inode());
+        self.filedata_.insert(filename.to_owned(), filedata.to_vec());
+        self.inodes_.insert(filename.to_owned(), self.next_inode());
     }
 
     pub fn new_file_entry(&mut self, path: &str, filedata: &str) -> super::file_entry::FileEntry {
@@ -219,18 +187,19 @@ impl AbstractFs for TestFs {
     type WritableFile = std::io::Cursor<&'static mut Vec<u8>>;
 
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
-        match self.filedata().get(&path_str(path)) {
+        match self.filedata_.get(&path_str(path)) {
             None => Err("File not found".into()),
             Some(s) => Ok(std::io::Cursor::new(s.to_vec().into_boxed_slice())),
         }
     }
 
-    fn open_writable<P: AsRef<Path>>(&self, path: P) -> Result<Self::WritableFile> {
-        let s = self.filedata_mut().entry(path_str(&path))
-            .or_default();
+    fn open_writable<P: AsRef<Path>>(&mut self, path: P) -> Result<Self::WritableFile> {
+        self.filedata_.insert(path_str(&path), vec![]);
+        // Ok(std::io::Cursor::new(self.filedata_.get_mut(&path_str(&path)).unwrap()))
+
         unsafe {
             // this is very bad. but ok come on, it's just for testing
-            Ok(std::io::Cursor::new(std::mem::transmute(s)))
+            Ok(std::io::Cursor::new(std::mem::transmute(self.filedata_.get_mut(&path_str(&path)).unwrap())))
         }
     }
 
@@ -249,9 +218,9 @@ impl AbstractFs for TestFs {
     // size, modified, accessed, created, inode
     fn metadata<P: AsRef<Path>>(&self, path: P) -> Result<(u64, SystemTime, SystemTime, SystemTime, u64)> {
         let path_str = path.as_ref().to_string_lossy();
-        let buf = self.filedata().get(path_str.as_ref())
-            .ok_or(Error::from(format!("file {:?} not found", path_str)))?;
-        let inode = self.inodes().get(path_str.as_ref()).ok_or(Error::from(format!("file {:?} not found", path_str)))?;
+        let buf = self.filedata_.get(path_str.as_ref())
+            .ok_or_else(|| Error::from(format!("file {:?} not found", path_str)))?;
+        let inode = self.inodes_.get(path_str.as_ref()).ok_or_else(|| Error::from(format!("file {:?} not found", path_str)))?;
         Ok((
             buf.len() as u64,
             // TODO: fix that
@@ -262,41 +231,49 @@ impl AbstractFs for TestFs {
         ))
     }
 
-    fn hard_link<P: AsRef<Path>, Q: AsRef<Path>>(&self, src: P, dst: Q) -> Result<()> {
-        if let Some(_) = self.filedata().get(&path_str(&dst)) {
+    fn hard_link<P: AsRef<Path>, Q: AsRef<Path>>(&mut self, src: P, dst: Q) -> Result<()> {
+        if let Some(_) = self.filedata_.get(&path_str(&dst)) {
             return Err("dst file exists!".into());
         }
-        let file_content = self.filedata().get(&path_str(&src)).ok_or(Error::from("file not found".to_owned()))?;
-        let inode = self.inodes().get(&path_str(&src)).ok_or(Error::from("file not found".to_owned()))?;
-        self.filedata_mut().insert(path_str(&dst), file_content.clone());
-        self.inodes_mut().insert(path_str(&dst), inode.clone());
+        let file_content = self.filedata_.get(&path_str(&src))
+            .cloned()
+            .ok_or_else(|| Error::from("file not found".to_owned()))?;
+        let inode = self.inodes_.get(&path_str(&src))
+            .cloned()
+            .ok_or_else(|| Error::from("file not found".to_owned()))?;
+        self.filedata_.insert(path_str(&dst), file_content);
+        self.inodes_.insert(path_str(&dst), inode);
         Ok(())
     }
 
-    fn remove_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        self.inodes_mut().remove(&path_str(&path)).ok_or(Error::from("file not found"))?;
-        self.filedata_mut().remove(&path_str(&path)).ok_or(Error::from("file_not_found"))?;
+    fn remove_file<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
+        self.inodes_.remove(&path_str(&path)).ok_or_else(|| Error::from("file not found"))?;
+        self.filedata_.remove(&path_str(&path)).ok_or_else(|| Error::from("file_not_found"))?;
         Ok(())
     }
 
-    fn rename<P: AsRef<Path>, Q: AsRef<Path>>(&self, from: P, to: Q) -> Result<()> {
+    fn rename<P: AsRef<Path>, Q: AsRef<Path>>(&mut self, from: P, to: Q) -> Result<()> {
         // get the file that we're going to move
-        let file_content = self.filedata().get(&path_str(&from)).ok_or(Error::from("file not found".to_owned()))?;
-        let inode = self.inodes().get(&path_str(&from)).ok_or(Error::from("file not found".to_owned()))?;
+        let file_content = self.filedata_.get(&path_str(&from))
+            .cloned()
+            .ok_or_else(|| Error::from("file not found".to_owned()))?;
+        let inode = self.inodes_.get(&path_str(&from))
+            .cloned()
+            .ok_or_else(|| Error::from("file not found".to_owned()))?;
 
         // if an existing file exists, overwrite it
-        if let Some(_) = self.filedata().get(&path_str(&to)) {
-            self.inodes_mut().remove(&path_str(&to)).ok_or(Error::from("file not found"))?;
-            self.filedata_mut().remove(&path_str(&to)).ok_or(Error::from("file_not_found"))?;
+        if let Some(_) = self.filedata_.get(&path_str(&to)) {
+            self.inodes_.remove(&path_str(&to)).ok_or_else(|| Error::from("file not found"))?;
+            self.filedata_.remove(&path_str(&to)).ok_or_else(|| Error::from("file_not_found"))?;
         }
 
         // remove the old file
-        self.inodes_mut().remove(&path_str(&from)).ok_or(Error::from("file not found"))?;
-        self.filedata_mut().remove(&path_str(&from)).ok_or(Error::from("file_not_found"))?;
+        self.inodes_.remove(&path_str(&from)).ok_or_else(|| Error::from("file not found"))?;
+        self.filedata_.remove(&path_str(&from)).ok_or_else(|| Error::from("file_not_found"))?;
 
         // insert the new file
-        self.filedata_mut().insert(path_str(&to), file_content.clone());
-        self.inodes_mut().insert(path_str(&to), inode.clone());
+        self.filedata_.insert(path_str(&to), file_content);
+        self.inodes_.insert(path_str(&to), inode);
         Ok(())
     }
 }

@@ -102,7 +102,7 @@ impl FilesIndex {
         Ok(Self::from_entries(base_path, &entries))
     }
 
-    pub fn save<Fs: AbstractFs>(&self, fs: &Fs) -> Result<()> {
+    pub fn save<Fs: AbstractFs>(&self, fs: &mut Fs) -> Result<()> {
         let mut index_path = self.base_path.clone();
         index_path.push(".index_file.csv");
 
@@ -247,7 +247,7 @@ impl FilesIndex {
     //     None
     // }
 
-    fn hard_link_and_insert<Fs: AbstractFs>(&mut self, fs: &Fs,
+    fn hard_link_and_insert<Fs: AbstractFs>(&mut self, fs: &mut Fs,
                                             existing_entry: &FileEntry,
                                             new_entry: &FileEntry,
     ) -> Result<&FileEntry> {
@@ -275,7 +275,7 @@ impl FilesIndex {
         Ok(self.update_file_entry(&checked_new_entry))
     }
 
-    pub fn add_file<Fs: AbstractFs, P: AsRef<Path>>(&mut self, fs: &Fs, path: P) -> Result<&FileEntry> {
+    pub fn add_file<Fs: AbstractFs, P: AsRef<Path>>(&mut self, fs: &mut Fs, path: P) -> Result<&FileEntry> {
         let mut new_entry = FileEntry::new(fs, &self.base_path, path)?;
 
         if self.by_inode.contains_key(&new_entry.stat_inode) {
@@ -426,7 +426,7 @@ mod test {
         let mut index = FilesIndex::new(base_path);
 
         let f1 = test_fs.new_file_entry("/somefolder/asdf", "test");
-        index.add_file(&test_fs, f1.relative_path.as_path()).unwrap();
+        index.add_file(&mut test_fs, f1.relative_path.as_path()).unwrap();
         assert_eq!(index.get_by_relative_path(&f1.relative_path.as_path()).unwrap(), &f1);
         assert_eq!(index.entries.len(), 1);
         assert_eq!(index.by_relative_path.len(), 1);
@@ -434,7 +434,7 @@ mod test {
 
 
         let f2 = test_fs.new_file_entry("/somefolder/asdfasdf", "testasdf");
-        index.add_file(&test_fs, f2.relative_path.as_path()).unwrap();
+        index.add_file(&mut test_fs, f2.relative_path.as_path()).unwrap();
         assert_eq!(index.get_by_relative_path(&f2.relative_path.as_path()).unwrap(), &f2);
         assert_eq!(index.entries.len(), 2);
         assert_eq!(index.by_relative_path.len(), 2);
@@ -443,8 +443,8 @@ mod test {
         // test with adding two un-equal files with the same size
         let f1 = test_fs.new_file_entry("/somefolder/test1", "test1 asdf asdf");
         let f2 = test_fs.new_file_entry("/somefolder/test2", "test2 asdf asdf");
-        index.add_file(&test_fs, f1.relative_path.as_path()).unwrap();
-        index.add_file(&test_fs, f2.relative_path.as_path()).unwrap();
+        index.add_file(&mut test_fs, f1.relative_path.as_path()).unwrap();
+        index.add_file(&mut test_fs, f2.relative_path.as_path()).unwrap();
         assert_eq!(index.by_size.len(), 3);
         assert_eq!(index.by_size.get(&15).unwrap().len(), 2);
 
@@ -462,8 +462,8 @@ mod test {
         let f1 = test_fs.new_file_entry("/somefolder/test1", "asdf");
         let f2 = test_fs.new_file_entry("/somefolder/test2", "asdf");
         assert_ne!(f1.stat_inode, f2.stat_inode);
-        index.add_file(&test_fs, f1.relative_path.as_path()).unwrap();
-        index.add_file(&test_fs, f2.relative_path.as_path()).unwrap();
+        index.add_file(&mut test_fs, f1.relative_path.as_path()).unwrap();
+        index.add_file(&mut test_fs, f2.relative_path.as_path()).unwrap();
         let f1 = index.get_by_relative_path(&f1.relative_path).unwrap();
         let f2 = index.get_by_relative_path(&f2.relative_path).unwrap();
         index.sanity_check();
@@ -487,9 +487,9 @@ mod test {
         assert_ne!(f1.stat_inode, f2.stat_inode);
         assert_ne!(f1.stat_inode, f3.stat_inode);
         assert_ne!(f2.stat_inode, f3.stat_inode);
-        index.add_file(&test_fs, f1.relative_path.as_path()).unwrap();
-        index.add_file(&test_fs, f2.relative_path.as_path()).unwrap();
-        index.add_file(&test_fs, f3.relative_path.as_path()).unwrap();
+        index.add_file(&mut test_fs, f1.relative_path.as_path()).unwrap();
+        index.add_file(&mut test_fs, f2.relative_path.as_path()).unwrap();
+        index.add_file(&mut test_fs, f3.relative_path.as_path()).unwrap();
         let f1 = index.get_by_relative_path(&f1.relative_path).unwrap();
         let f2 = index.get_by_relative_path(&f2.relative_path).unwrap();
         let f3 = index.get_by_relative_path(&f3.relative_path).unwrap();
@@ -513,12 +513,12 @@ mod test {
         let f1 = test_fs.new_file_entry("/somefolder/test1", "asdf");
         let f2 = test_fs.new_file_entry("/somefolder/test2", "asdf");
         let f3 = test_fs.new_file_entry("/somefolder/test3", "asdf");
-        index.add_file(&test_fs, f1.relative_path.as_path()).unwrap();
-        index.add_file(&test_fs, f2.relative_path.as_path()).unwrap();
-        index.add_file(&test_fs, f3.relative_path.as_path()).unwrap();
+        index.add_file(&mut test_fs, f1.relative_path.as_path()).unwrap();
+        index.add_file(&mut test_fs, f2.relative_path.as_path()).unwrap();
+        index.add_file(&mut test_fs, f3.relative_path.as_path()).unwrap();
         index.sanity_check();
 
-        index.save(&test_fs).unwrap();
+        index.save(&mut test_fs).unwrap();
         let s = test_fs.get_file_data("/somefolder/.index_file.csv").unwrap();
         let s = std::str::from_utf8(s).unwrap();
         assert_eq!(s, "relative_path,fast_hash,stat_size,stat_modified,stat_accessed,stat_created,stat_inode
@@ -557,9 +557,9 @@ test3,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T
         assert_eq!(f1.fast_hash, f2.fast_hash);
         assert_eq!(f1.fast_hash, f3.fast_hash);
 
-        index.add_file(&test_fs, f1.relative_path.as_path()).unwrap();
-        index.add_file(&test_fs, f2.relative_path.as_path()).unwrap();
-        index.add_file(&test_fs, f3.relative_path.as_path()).unwrap();
+        index.add_file(&mut test_fs, f1.relative_path.as_path()).unwrap();
+        index.add_file(&mut test_fs, f2.relative_path.as_path()).unwrap();
+        index.add_file(&mut test_fs, f3.relative_path.as_path()).unwrap();
         index.sanity_check();
     }
 
@@ -579,7 +579,7 @@ test3,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T
             let f1 = test_fs.new_file_entry(format!("/largefolder/file_{}", i).as_str(),
                                             &content,
             );
-            index.add_file(&test_fs, f1.relative_path.as_path()).unwrap();
+            index.add_file(&mut test_fs, f1.relative_path.as_path()).unwrap();
         }
         index.sanity_check();
         assert_eq!(file_content.len(), index.by_inode.len());

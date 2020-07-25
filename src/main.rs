@@ -37,17 +37,17 @@ fn main() {
     println!("{:?}", opts);
     if opts.dry_run {
         println!("running a dry run");
-        let fs = ReadOnlyFs {};
-        run_for_folder(&fs, opts.folder).unwrap();
+        let mut fs = ReadOnlyFs {};
+        run_for_folder(&mut fs, opts.folder).unwrap();
     } else {
         // let fs = RealFs {};
-        let fs = ReadOnlyFs {};
-        run_for_folder(&fs, opts.folder).unwrap();
+        let mut fs = ReadOnlyFs {};
+        run_for_folder(&mut fs, opts.folder).unwrap();
     }
 
 }
 
-fn run_for_folder<Fs: AbstractFs, P: AsRef<Path>>(fs: &Fs, path: P) -> Result<()> {
+fn run_for_folder<Fs: AbstractFs, P: AsRef<Path>>(fs: &mut Fs, path: P) -> Result<()> {
     let base_path = std::fs::canonicalize(path)?;
     let mut files_index = FilesIndex::new(&base_path);
 
