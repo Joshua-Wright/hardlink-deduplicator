@@ -44,6 +44,19 @@ impl FileEntry {
         })
     }
 
+    pub fn reload_from_disk<F: fs::AbstractFs, P1: AsRef<Path>>(&self, fs: &F, base_path: P1) -> Result<Self> {
+        let mut new_entry = FileEntry::new(fs, &base_path, self.absolute_path(&base_path))?;
+        if self.eq_except_hash(&new_entry) {
+            new_entry.fast_hash = self.fast_hash;
+        }
+        Ok(new_entry)
+    }
+
+    pub fn agrees_with_disk<F: fs::AbstractFs, P1: AsRef<Path>>(&self, fs: &F, base_path: P1) -> Result<bool> {
+        let new_entry = FileEntry::new(fs, &base_path, self.absolute_path(&base_path))?;
+        Ok(self.eq_except_hash(&new_entry))
+    }
+
     pub fn absolute_path<P: AsRef<Path>>(&self, base_path: P) -> PathBuf {
         base_path.as_ref().join(self.relative_path.as_path())
     }

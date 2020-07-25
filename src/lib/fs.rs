@@ -10,7 +10,9 @@ pub trait AbstractFs {
     type File: std::io::Read;
     type WritableFile: std::io::Write;
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File>;
-    fn open_writable<P: AsRef<Path>>(&mut self, path: P) -> Result<Self::WritableFile>;
+    // fn open_writable<P: AsRef<Path>>(&mut self, path: P) -> Result<Self::WritableFile>;
+    fn write_to_file<P: AsRef<Path>>(&mut self, path: P, buf: &[u8]) -> Result<()>;
+
     fn canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf>;
     // size, modified, accessed, created, inode
     fn metadata<P: AsRef<Path>>(&self, path: P) -> Result<(u64, SystemTime, SystemTime, SystemTime, u64)>;
@@ -35,12 +37,14 @@ impl<'a> AbstractFs for RealFs {
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
         Self::File::open(path).map_err(Into::into)
     }
-    fn open_writable<'b, P: AsRef<Path>>(&'b mut self, path: P) -> Result<Self::WritableFile> {
-        std::fs::OpenOptions::new()
+    fn write_to_file<P: AsRef<Path>>(&mut self, path: P, buf: &[u8]) -> Result<()> {
+        let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
-            .open(path).map_err(Into::into)
+            .open(path)?;
+        use std::io::Write;
+        file.write_all(buf).map_err(Into::into)
     }
     fn canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf> {
         std::fs::canonicalize(path).map_err(Into::into)
@@ -76,7 +80,7 @@ impl AbstractFs for ReadOnlyFs {
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
         Self::File::open(path).map_err(Into::into)
     }
-    fn open_writable<'b, P: AsRef<Path>>(&'b mut self, _path: P) -> Result<Self::WritableFile> {
+    fn write_to_file<P: AsRef<Path>>(&mut self, _path: P, _buf: &[u8]) -> Result<()> {
         Err(Error::ReadOnlyFs())
     }
     fn canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf> {
@@ -135,17 +139,32 @@ impl TestFs {
         TestFs {
             filedata_: files.to_owned().iter()
                 .map(|(a, b)| (a.deref().to_owned(), b.to_owned().as_bytes().to_vec()))
-                .collect::<HashMap<String, Vec<u8>>>()
-                .into(),
+                .collect::<HashMap<String, Vec<u8>>>(),
             // default to everything is a unique inode
             inodes_: files.to_owned().iter()
                 .enumerate()
                 .map(|(i, (a, _))| (a.deref().to_owned(), (i + 1) as u64))
-                .collect::<HashMap<String, u64>>()
-                .into(),
+                .collect::<HashMap<String, u64>>(),
             cwd: PathBuf::from("/"),
             count: UnsafeCell::new(0),
         }
+    }
+
+    pub fn pretty_print(&self) {
+        println!("TestFS {{");
+        println!("cwd: {:?}", self.cwd);
+
+        println!("filedata:");
+        for (path, content) in self.filedata_.iter() {
+            println!("\t{:?}, len={}", path, content.len());
+        }
+
+        println!("inodes:");
+        for (path, inode) in self.inodes_.iter() {
+            println!("\t{:?}, {}", path, inode);
+        }
+
+        println!("}}");
     }
 
     pub fn get_file_data<P: AsRef<Path>>(&self, path: P) -> Result<&[u8]> {
@@ -193,20 +212,15 @@ impl AbstractFs for TestFs {
         }
     }
 
-    fn open_writable<P: AsRef<Path>>(&mut self, path: P) -> Result<Self::WritableFile> {
-        self.filedata_.insert(path_str(&path), vec![]);
-        // Ok(std::io::Cursor::new(self.filedata_.get_mut(&path_str(&path)).unwrap()))
-
-        unsafe {
-            // this is very bad. but ok come on, it's just for testing
-            Ok(std::io::Cursor::new(std::mem::transmute(self.filedata_.get_mut(&path_str(&path)).unwrap())))
-        }
+    fn write_to_file<P: AsRef<Path>>(&mut self, path: P, buf: &[u8]) -> Result<()> {
+        self.filedata_.insert(path_str(&path), buf.to_vec());
+        Ok(())
     }
 
     fn canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf> {
-        unsafe {
-            *self.count.get() += 1;
-        }
+        // unsafe {
+        //     *self.count.get() += 1;
+        // }
         // TODO what should we even do here?
         if path.as_ref().has_root() {
             Ok(path.as_ref().to_owned())
@@ -232,6 +246,8 @@ impl AbstractFs for TestFs {
     }
 
     fn hard_link<P: AsRef<Path>, Q: AsRef<Path>>(&mut self, src: P, dst: Q) -> Result<()> {
+        self.pretty_print();
+        println!("hard_link({:?},{:?})", &path_str(&src), &path_str(&dst));
         if let Some(_) = self.filedata_.get(&path_str(&dst)) {
             return Err("dst file exists!".into());
         }

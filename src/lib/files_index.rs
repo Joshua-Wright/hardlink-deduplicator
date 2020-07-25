@@ -60,7 +60,11 @@ impl FilesIndex {
         }
     }
 
-    fn from_entries<P: AsRef<Path>>(base_path: P, entries: &[FileEntry]) -> Self {
+    fn from_entries<Fs: AbstractFs, P: AsRef<Path>>(fs: &Fs, base_path: P, entries: &[FileEntry]) -> Self {
+        let entries: Vec<FileEntry> = entries.iter()
+            .filter(|e| e.agrees_with_disk(fs, &base_path).ok() == Some(true))
+            .cloned()
+            .collect();
         let by_path = entries.iter()
             .enumerate()
             .map(|(i, e)| (e.relative_path.to_owned(), i))
@@ -68,16 +72,15 @@ impl FilesIndex {
 
         Self {
             base_path: base_path.as_ref().to_path_buf(),
-            entries: entries.to_vec(),
             by_relative_path: by_path,
-            by_size: group_by(entries, |e| e.stat_size),
-            by_inode: group_by(entries, |e| e.stat_inode),
+            by_size: group_by(&entries, |e| e.stat_size),
+            by_inode: group_by(&entries, |e| e.stat_inode),
             by_hash: group_by(
                 entries.iter().filter(|e| e.fast_hash.is_some()),
                 |e| e.fast_hash.unwrap(),
             ),
             inode_by_size: group_by_with_value_func(
-                entries,
+                &entries,
                 |e| e.stat_size,
                 |_, e| e.stat_inode,
             ),
@@ -86,6 +89,7 @@ impl FilesIndex {
                 |e| e.fast_hash.unwrap(),
                 |_, e| e.stat_inode,
             ),
+            entries,
         }
     }
 
@@ -99,25 +103,29 @@ impl FilesIndex {
         let entries: Vec<FileEntry> = rdr.deserialize()
             .collect::<std::result::Result<_, _>>()?;
 
-        Ok(Self::from_entries(base_path, &entries))
+        Ok(Self::from_entries(fs, base_path, &entries))
     }
 
     pub fn save<Fs: AbstractFs>(&self, fs: &mut Fs) -> Result<()> {
         let mut index_path = self.base_path.clone();
         index_path.push(".index_file.csv");
 
-        let file = fs.open_writable(index_path)?;
-        let mut wtr = csv::Writer::from_writer(file);
-        for entry in &self.entries {
-            wtr.serialize(entry)?;
+        // let file = fs.open_writable(index_path)?;
+        let mut buf = vec![];
+        {
+            let mut wtr = csv::Writer::from_writer(&mut buf);
+            for entry in &self.entries {
+                wtr.serialize(entry)?;
+            }
         }
+        fs.write_to_file(index_path, &buf)?;
         Ok(())
     }
 
     pub fn sanity_check(&self) {
         // check starting from the file entries
         for (i, entry) in self.entries.iter().enumerate() {
-            assert!(self.by_relative_path.get(&entry.relative_path).unwrap() == &i);
+            assert_eq!(self.by_relative_path.get(&entry.relative_path).unwrap(), &i);
             assert!(self.by_size.get(&entry.stat_size).unwrap().contains(&i));
             assert!(self.by_inode.get(&entry.stat_inode).unwrap().contains(&i));
             assert!(self.inode_by_size.get(&entry.stat_size).unwrap().contains(&entry.stat_inode));
@@ -225,28 +233,6 @@ impl FilesIndex {
         &self.entries[idx]
     }
 
-    // TODO: get this to work
-    // pub fn add_file_if_trivial_unique(&mut self, new_entry: &FileEntry) -> Option<&FileEntry> {
-    //     // this file is already deduplicated into this index
-    //     if let Some(existing) = self.by_inode.get(&new_entry.stat_inode) {
-    //         // grab the hash, if possible
-    //         let &idx = existing.iter().next().unwrap();
-    //         let fast_hash = self.entries[idx].fast_hash;
-    //         return self.insert_or_overwrite_file_entry(
-    //             &FileEntry {
-    //                 fast_hash: fast_hash,
-    //                 ..new_entry.clone()
-    //             }
-    //         ).into();
-    //     }
-    //
-    //     if !self.by_size.contains_key(&new_entry.stat_size) {
-    //         // this file is unique because nothing in the index could match this file by length
-    //         return self.insert_or_overwrite_file_entry(&new_entry).into();
-    //     }
-    //     None
-    // }
-
     fn hard_link_and_insert<Fs: AbstractFs>(&mut self, fs: &mut Fs,
                                             existing_entry: &FileEntry,
                                             new_entry: &FileEntry,
@@ -254,7 +240,8 @@ impl FilesIndex {
         // TODO: implement dry-run mode
         assert_eq!(new_entry.stat_size, existing_entry.stat_size);
         assert_eq!(new_entry.fast_hash, existing_entry.fast_hash);
-        assert_ne!(new_entry.stat_inode, existing_entry.stat_inode);
+        assert_ne!(new_entry.stat_inode, existing_entry.stat_inode, "error: tried to link files that are the same");
+        assert_ne!(new_entry.relative_path, existing_entry.relative_path, "error: tried to link file to itself");
 
         let mut backup_filename = new_entry.relative_path.file_name().unwrap().to_owned();
         backup_filename.push(".backup");
@@ -277,6 +264,9 @@ impl FilesIndex {
 
     pub fn add_file<Fs: AbstractFs, P: AsRef<Path>>(&mut self, fs: &mut Fs, path: P) -> Result<&FileEntry> {
         let mut new_entry = FileEntry::new(fs, &self.base_path, path)?;
+        if let Some(existing_entry) = self.get_by_relative_path(&new_entry.relative_path) {
+            assert!(new_entry.eq_except_hash(existing_entry));
+        }
 
         if self.by_inode.contains_key(&new_entry.stat_inode) {
             // this file is already deduplicated into this index
@@ -302,12 +292,12 @@ impl FilesIndex {
                     };
                     self.update_file_entry(&updated_existing_entry);
                     new_entry.fast_hash = Some(new_entry_hash);
-                    if equal {
+                    return if equal {
                         // they are equal, so this is a duplicate file
-                        return Ok(self.hard_link_and_insert(fs, &updated_existing_entry, &new_entry)?);
+                        Ok(self.hard_link_and_insert(fs, &updated_existing_entry, &new_entry)?)
                     } else {
                         // it's a non-duplicate, so just insert it
-                        return Ok(self.update_file_entry(&new_entry));
+                        Ok(self.update_file_entry(&new_entry))
                     }
                 }
                 // we told self.compare_files() not to short-circuit, so it better not have short-circuited
@@ -340,7 +330,7 @@ impl FilesIndex {
         }
 
         // if we get this far, then that means we didn't find any matches, and this file is unique
-        return Ok(self.update_file_entry(&new_entry));
+        Ok(self.update_file_entry(&new_entry))
     }
 
 
@@ -378,7 +368,7 @@ impl FilesIndex {
             reader2.consume(len2);
         }
 
-        Ok((equal, (hasher1.finish_ext().into(), hasher2.finish_ext().into()).into()))
+        Ok((equal, (hasher1.finish_ext(), hasher2.finish_ext()).into()))
     }
 }
 
@@ -404,7 +394,7 @@ mod test {
             test_fs.new_file_entry("/somefolder/newfile", "newfile"),
         ];
 
-        let index = FilesIndex::from_entries("/somefolder/", &file_entries);
+        let index = FilesIndex::from_entries(&test_fs,"/somefolder/", &file_entries);
         assert_eq!(index.entries.len(), 3);
         assert_eq!(index.by_relative_path.len(), 3);
         assert_eq!(index.by_size.len(), 3);
@@ -526,6 +516,18 @@ test1,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T
 test2,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,2
 test3,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,2
 ");
+
+        let index = FilesIndex::for_base_path(&test_fs, base_path).unwrap();
+        index.sanity_check();
+        let f1 = index.get_by_relative_path(&f1.relative_path).unwrap().clone();
+        let f2 = index.get_by_relative_path(&f2.relative_path).unwrap().clone();
+        let f3 = index.get_by_relative_path(&f3.relative_path).unwrap().clone();
+        assert!(f2.fast_hash.is_some());
+        assert!(f3.fast_hash.is_some());
+        assert_eq!(f1.stat_inode, f2.stat_inode);
+        assert_eq!(f1.fast_hash, Some(290827534275623791776536726795751555336));
+        assert_eq!(f1.fast_hash, f2.fast_hash);
+        assert_eq!(f1.fast_hash, f3.fast_hash);
     }
 
     #[test]
@@ -537,6 +539,9 @@ test3,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T
         let f1 = test_fs.new_file_entry("/somefolder/test1", "asdf");
         let f2 = test_fs.new_file_entry("/somefolder/test2", "asdf");
         let f3 = test_fs.new_file_entry("/somefolder/test3", "asdf");
+        assert_eq!(f1.stat_inode, 2);
+        assert_eq!(f2.stat_inode, 3);
+        assert_eq!(f3.stat_inode, 4);
         test_fs.add_text_file("/somefolder/.index_file.csv",
                                                "relative_path,fast_hash,stat_size,stat_modified,stat_accessed,stat_created,stat_inode
 test1,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,1970-01-01T00:00:00Z,2
@@ -548,18 +553,22 @@ test3,290827534275623791776536726795751555336,4,1970-01-01T00:00:00Z,1970-01-01T
         index.sanity_check();
 
         let f1 = index.get_by_relative_path(&f1.relative_path).unwrap().clone();
-        let f2 = index.get_by_relative_path(&f2.relative_path).unwrap().clone();
-        let f3 = index.get_by_relative_path(&f3.relative_path).unwrap().clone();
-        assert!(f1.fast_hash.is_some());
-        assert!(f2.fast_hash.is_some());
-        assert!(f3.fast_hash.is_some());
-        assert_eq!(f1.stat_inode, f2.stat_inode);
-        assert_eq!(f1.fast_hash, f2.fast_hash);
-        assert_eq!(f1.fast_hash, f3.fast_hash);
+        assert_eq!(f1.fast_hash, Some(290827534275623791776536726795751555336));
+        // these are missing because the inode changed so we had to discard them
+        assert!(index.get_by_relative_path(&f2.relative_path).is_none());
+        assert!(index.get_by_relative_path(&f3.relative_path).is_none());
 
         index.add_file(&mut test_fs, f1.relative_path.as_path()).unwrap();
         index.add_file(&mut test_fs, f2.relative_path.as_path()).unwrap();
         index.add_file(&mut test_fs, f3.relative_path.as_path()).unwrap();
+        let f2 = index.get_by_relative_path(&f2.relative_path).unwrap().clone();
+        let f3 = index.get_by_relative_path(&f3.relative_path).unwrap().clone();
+        assert!(f2.fast_hash.is_some());
+        assert!(f3.fast_hash.is_some());
+        assert_eq!(f1.stat_inode, f2.stat_inode);
+        assert_eq!(f1.fast_hash, Some(290827534275623791776536726795751555336));
+        assert_eq!(f1.fast_hash, f2.fast_hash);
+        assert_eq!(f1.fast_hash, f3.fast_hash);
         index.sanity_check();
     }
 
