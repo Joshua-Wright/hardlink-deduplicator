@@ -11,6 +11,10 @@ walkdir = "2"
 fasthash = { git = "https://github.com/Joshua-Wright/rust-fasthash/", rev = "bd0ef9b9391ca80d1a115c3207e1f8417bb4c6b9"}
 cfg-if = "0.1.10"
 backtrace = "0.3.50"
+clap = "3.0.0-beta.1"
+csv = "1.1"
+serde = { version = "1", features = ["derive"] }
+humantime-serde = "1.0.0"
 
 #[dev-dependencies]
 [dependencies.mockall]

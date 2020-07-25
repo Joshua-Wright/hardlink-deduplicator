@@ -8,7 +8,9 @@ use super::Error;
 
 pub trait AbstractFs {
     type File: std::io::Read;
+    type WritableFile: std::io::Write;
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File>;
+    fn open_writable<P: AsRef<Path>>(&self, path: P) -> Result<Self::WritableFile>;
     fn canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf>;
     // size, modified, accessed, created, inode
     fn metadata<P: AsRef<Path>>(&self, path: P) -> Result<(u64, SystemTime, SystemTime, SystemTime, u64)>;
@@ -18,26 +20,34 @@ pub trait AbstractFs {
     fn rename<P: AsRef<Path>, Q: AsRef<Path>>(&self, from: P, to: Q) -> Result<()>;
 }
 
-cfg_if::cfg_if! {
-    if #[cfg(not(test))] {
-        pub use RealFs as Fs;
-    } else {
-        pub use TestFs as Fs;
-    }
-}
+// cfg_if::cfg_if! {
+//     if #[cfg(not(test))] {
+//         pub use RealFs as Fs;
+//     } else {
+//         pub use TestFs as Fs;
+//     }
+// }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
-
-
 #[derive(Debug, Default)]
 pub struct RealFs {}
+
 impl RealFs {}
+
 impl AbstractFs for RealFs {
     type File = std::fs::File;
+    type WritableFile = std::fs::File;
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
         Self::File::open(path).map_err(Into::into)
+    }
+    fn open_writable<P: AsRef<Path>>(&self, path: P) -> Result<Self::WritableFile> {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path).map_err(Into::into)
     }
     fn canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf> {
         std::fs::canonicalize(path).map_err(Into::into)
@@ -64,11 +74,17 @@ impl AbstractFs for RealFs {
 
 #[derive(Debug, Default)]
 pub struct ReadOnlyFs {}
+
 impl ReadOnlyFs {}
+
 impl AbstractFs for ReadOnlyFs {
     type File = std::fs::File;
+    type WritableFile = std::fs::File;
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
         Self::File::open(path).map_err(Into::into)
+    }
+    fn open_writable<P: AsRef<Path>>(&self, path: P) -> Result<Self::WritableFile> {
+        Err(Error::ReadOnlyFs())
     }
     fn canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf> {
         std::fs::canonicalize(path).map_err(Into::into)
@@ -91,7 +107,6 @@ impl AbstractFs for ReadOnlyFs {
         Err(Error::ReadOnlyFs())
     }
 }
-
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -137,6 +152,13 @@ impl TestFs {
                 .into(),
             cwd: PathBuf::from("/"),
             count: UnsafeCell::new(0),
+        }
+    }
+
+    pub fn get_file_data<P: AsRef<Path>>(&self, path: P) -> Result<&[u8]> {
+        match self.filedata().get(&path_str(path)) {
+            None => Err("File not found".into()),
+            Some(s) => Ok(s),
         }
     }
 
@@ -194,11 +216,21 @@ impl TestFs {
 #[cfg(test)]
 impl AbstractFs for TestFs {
     type File = std::io::Cursor<Box<[u8]>>;
+    type WritableFile = std::io::Cursor<&'static mut Vec<u8>>;
 
     fn open<P: AsRef<Path>>(&self, path: P) -> Result<Self::File> {
         match self.filedata().get(&path_str(path)) {
             None => Err("File not found".into()),
             Some(s) => Ok(std::io::Cursor::new(s.to_vec().into_boxed_slice())),
+        }
+    }
+
+    fn open_writable<P: AsRef<Path>>(&self, path: P) -> Result<Self::WritableFile> {
+        let s = self.filedata_mut().entry(path_str(&path))
+            .or_default();
+        unsafe {
+            // this is very bad. but ok come on, it's just for testing
+            Ok(std::io::Cursor::new(std::mem::transmute(s)))
         }
     }
 

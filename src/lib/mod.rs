@@ -17,6 +17,7 @@ pub enum Error {
     IO(Backtrace, std::io::Error),
     StripPrefixError(Backtrace, std::path::StripPrefixError),
     ReadOnlyFs(),
+    Csv(Backtrace, csv::Error),
 }
 
 impl From<String> for Error {
@@ -40,7 +41,12 @@ impl From<std::path::StripPrefixError> for Error {
 
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
-        // std::backtrace::Backtrace::capture();
         Error::IO(Backtrace::new(), e)
+    }
+}
+
+impl From<csv::Error> for Error {
+    fn from(e: csv::Error) -> Self {
+        Error::Csv(Backtrace::new(), e)
     }
 }

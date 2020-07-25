@@ -2,16 +2,22 @@ use std::option::Option;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use serde::Deserialize;
+use serde::Serialize;
+
 use super::fs;
 use super::Result;
 
-#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Deserialize, Serialize, Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub struct FileEntry {
     pub relative_path: PathBuf,
     pub fast_hash: Option<u128>,
     pub stat_size: u64,
+    #[serde(with = "humantime_serde")]
     pub stat_modified: SystemTime,
+    #[serde(with = "humantime_serde")]
     pub stat_accessed: SystemTime,
+    #[serde(with = "humantime_serde")]
     pub stat_created: SystemTime,
     // in the case of non-duplicate files with the same size and hash, the inode resolves the duplicates
     pub stat_inode: u64,
@@ -45,6 +51,24 @@ impl FileEntry {
     pub fn relative_folder(&self) -> &Path {
         self.relative_path.parent().unwrap()
     }
+
+    pub fn eq_except_hash(&self, other: &Self) -> bool {
+        (
+            &self.relative_path,
+            &self.stat_size,
+            &self.stat_modified,
+            &self.stat_accessed,
+            &self.stat_created,
+            &self.stat_inode
+        ) == (
+            &other.relative_path,
+            &other.stat_size,
+            &other.stat_modified,
+            &other.stat_accessed,
+            &other.stat_created,
+            &other.stat_inode
+        )
+    }
 }
 
 #[cfg(test)]
@@ -53,7 +77,6 @@ mod test {
 
     use crate::lib::file_entry::FileEntry;
     use crate::lib::fs::TestFs;
-
 
     #[test]
     fn test_new_file_entry() {
